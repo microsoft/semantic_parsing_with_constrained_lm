@@ -1,4 +1,24 @@
-# Project
+# Constrained Language Models Yield Few-Shot Semantic Parsers
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) 
+
+<img align="right" src="https://avatars2.githubusercontent.com/u/9585815?s=200&v=4" width="18%">
+
+
+This repository contains tools and instructions for reproducing the experiments in the paper
+[**Constrained Language Models Yield Few-Shot Semantic Parsers** (EMNLP 2021)](https://arxiv.org/abs/2104.08768).
+If you use any source code or data included in this toolkit in your work, please cite the following paper.
+```bib
+@inproceedings{ConstrainedLMSemanticParser2021,
+    title = "Constrained Language Models Yield Few-Shot Semantic Parsers",
+    author = "Shin, Riichard and Lin, Christopher H. and Thomson, Sam and Chen, Charles and Roy, Subhro and Platanios,  Emmanouil Antonios and Pauls, Adam and Klein, Dan and Eisner, Jason and Van Durme, Benjamin",
+    booktitle = "Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing",
+    year = "2021",
+    publisher = "Association for Computational Linguistics",
+}
+```
+
+We are in the process of setting up the repository. It should be completed by November 6 at the latest.
 
 > This repo has been populated by an initial template to help get you started. Please
 > make sure to update the content to build a great experience for community-building.
