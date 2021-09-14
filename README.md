@@ -20,6 +20,8 @@ If you use any source code or data included in this toolkit in your work, please
 
 We are in the process of setting up the repository. It should be completed by November 6 at the latest.
 
+Please star the repository, and we will attempt to send you an email when the code becomes available.
+
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
