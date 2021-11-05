@@ -55,7 +55,7 @@ highly significant cost. If you would like to try a subset of the experiments in
 ### Preliminary setup
 Download and pre-process the data for Overnight:
 ```
-PIPX_HOME=.pipx PIPX_BIN_DIR=.venv/bin pipx install --python ~/.pyenv/versions/3.7.9/bin/python codalab
+PIPX_HOME=.pipx PIPX_BIN_DIR=.venv/bin pipx install --python <path to python3.7> codalab
 python -m semantic_parsing_with_constrained_lm.domains.overnight.download_data
 ```
 
