@@ -5,7 +5,7 @@
 <img align="right" src="https://avatars2.githubusercontent.com/u/9585815?s=200&v=4" width="18%">
 
 This repository contains tools and instructions for reproducing the experiments in the paper
-[**Constrained Language Models Yield Few-Shot Semantic Parsers** (EMNLP 2021)](https://arxiv.org/abs/2104.08768).
+[**Constrained Language Models Yield Few-Shot Semantic Parsers** (EMNLP 2021)](https://aclanthology.org/2021.emnlp-main.608/).
 If you use any source code or data included in this toolkit in your work, please cite the following paper.
 ```bib
 @inproceedings{ConstrainedLMSemanticParser2021,
