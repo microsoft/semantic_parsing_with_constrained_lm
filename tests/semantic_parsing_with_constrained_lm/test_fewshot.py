@@ -3,6 +3,7 @@
 
 import textwrap
 from dataclasses import dataclass
+from typing import Optional
 
 from semantic_parsing_with_constrained_lm import fewshot
 
@@ -10,7 +11,7 @@ from semantic_parsing_with_constrained_lm import fewshot
 @dataclass
 class Datum:
     a: str
-    b: str
+    b: Optional[str]
     c: str
 
 

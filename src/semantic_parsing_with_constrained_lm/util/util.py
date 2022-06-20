@@ -18,6 +18,8 @@ from typing import (
 
 from more_itertools import chunked
 
+from semantic_parsing_with_constrained_lm.util.unit import UNIT, Unit
+
 _A = TypeVar("_A")
 _N = TypeVar("_N", int, float)
 
@@ -163,10 +165,10 @@ def aligned_zip(
     left_iter = iter(left_iter)
     right_iter = iter(right_iter)
 
-    left_item: _T1 = None
-    left_key: _K1 = None
-    right_item: _T2 = None
-    right_key: _K2 = None
+    left_item = UNIT
+    left_key = UNIT
+    right_item = UNIT
+    right_key = UNIT
 
     def next_left():
         nonlocal left_item, left_key
@@ -182,7 +184,11 @@ def aligned_zip(
         next_left()
         next_right()
         while True:
+            assert not isinstance(left_key, Unit)
+            assert not isinstance(right_key, Unit)
             if left_key == right_key:
+                assert not isinstance(left_item, Unit)
+                assert not isinstance(right_item, Unit)
                 yield (left_item, right_item)
                 next_left()
                 next_right()

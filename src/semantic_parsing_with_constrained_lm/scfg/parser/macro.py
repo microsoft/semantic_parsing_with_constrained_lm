@@ -1,9 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from typing import Dict, List, Tuple, cast
-
-from pydantic.dataclasses import dataclass
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, cast
 
 from semantic_parsing_with_constrained_lm.scfg.parser.token import MacroToken, NonterminalToken, SCFGToken
 from semantic_parsing_with_constrained_lm.scfg.parser.types import Expansion
@@ -16,7 +15,7 @@ class Macro:
     expansion: Expansion
 
     def apply_expression(
-        self, macro_rules: Dict[str, "Macro"], args_to_bind: List[Expansion],
+        self, macro_rules: Dict[str, "Macro"], args_to_bind: List[Expansion]
     ) -> Expansion:
         """
         Apply this macro to the argument. Because all macros cannot use any variables outside of its definition,
@@ -25,13 +24,15 @@ class Macro:
         result: List[SCFGToken] = []
         for token in self.expansion:
             result += eval_expression(
-                macro_rules, token, dict(zip(self.args, args_to_bind)),
+                macro_rules, token, dict(zip(self.args, args_to_bind))
             )
         return tuple(result)
 
 
 def eval_expression(
-    macros: Dict[str, Macro], token: SCFGToken, env: Dict[str, Expansion] = None,
+    macros: Dict[str, Macro],
+    token: SCFGToken,
+    env: Optional[Dict[str, Expansion]] = None,
 ) -> Expansion:
     """
     Given a token, eval it.

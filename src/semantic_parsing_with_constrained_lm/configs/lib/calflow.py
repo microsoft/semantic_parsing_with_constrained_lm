@@ -2,20 +2,26 @@
 # Licensed under the MIT License.
 
 import functools
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from transformers.tokenization_utils import PreTrainedTokenizer
 
 from semantic_parsing_with_constrained_lm.scfg.read_grammar import PreprocessedGrammar
-from semantic_parsing_with_constrained_lm.configs.lib.common import PromptOrder, make_semantic_parser
-from semantic_parsing_with_constrained_lm.datum import Datum, FullDatum
-from semantic_parsing_with_constrained_lm.domains.calflow import (
-    CalflowOutputLanguage,
-    read_calflow_jsonl,
+from semantic_parsing_with_constrained_lm.configs.lib.common import (
+    PromptOrder,
+    SeparateLM,
+    make_semantic_parser,
 )
-from semantic_parsing_with_constrained_lm.earley_partial_parse import (
+from semantic_parsing_with_constrained_lm.datum import Datum
+from semantic_parsing_with_constrained_lm.decoding.earley_partial_parse import (
     GrammarTokenizerInfo,
     UTF8EarleyPartialParse,
+)
+from semantic_parsing_with_constrained_lm.decoding.partial_parse import StartsWithSpacePartialParse
+from semantic_parsing_with_constrained_lm.domains.calflow import (
+    CalflowDatum,
+    CalflowOutputLanguage,
+    read_calflow_jsonl,
 )
 from semantic_parsing_with_constrained_lm.fewshot import PromptBuilder
 from semantic_parsing_with_constrained_lm.lm import (
@@ -23,8 +29,11 @@ from semantic_parsing_with_constrained_lm.lm import (
     ClientType,
     IncrementalLanguageModel,
 )
-from semantic_parsing_with_constrained_lm.model import BeamSearchSemanticParser
-from semantic_parsing_with_constrained_lm.search import StartsWithSpacePartialParse
+from semantic_parsing_with_constrained_lm.model import (
+    BeamSearchSemanticParser,
+    DecodingSetup,
+    ProblemFactory,
+)
 
 # This is a magic number computed by Chris, the origins of which are no
 # longer exactly known. It should correspond to the maximum number of GPT-2
@@ -40,7 +49,9 @@ from semantic_parsing_with_constrained_lm.search import StartsWithSpacePartialPa
 MAX_STEPS_FOR_COMPLETION = 313
 
 
-calflow_max_steps_fn_params = {
+calflow_max_steps_fn_params: Dict[
+    Tuple[CalflowOutputLanguage, ClientType], Tuple[float, float]
+] = {
     # python semantic_parsing_with_constrained_lm/scripts/calflow_fit_max_steps.py \
     # --data-path \
     # semantic_parsing_with_constrained_lm/domains/calflow/data/train_300_stratified.jsonl \
@@ -91,7 +102,7 @@ def get_calflow_max_steps_fn(
 
 
 def make_semantic_parser_for_calflow(
-    train_data: List[FullDatum],
+    train_data: List[CalflowDatum],
     lm: AutoregressiveModel,
     use_gpt3: bool,
     beam_size: int,
@@ -104,6 +115,7 @@ def make_semantic_parser_for_calflow(
     similarity_lm: Optional[IncrementalLanguageModel] = None,
     prompt_builder: Optional[PromptBuilder] = None,
     num_examples_per_prompt: int = 20,
+    problem_factory_builder: Optional[Callable[[DecodingSetup], ProblemFactory]] = None,
 ) -> BeamSearchSemanticParser:
     if constrained:
         grammar_tokenizer_info = GrammarTokenizerInfo.create(
@@ -131,9 +143,10 @@ def make_semantic_parser_for_calflow(
         partial_parse_builder,
         max_steps_fn=max_steps_fn,
         prompt_order=prompt_order,
-        similarity_lm=similarity_lm,
+        similarity_method=SeparateLM(similarity_lm=similarity_lm),  # type: ignore
         prompt_builder=prompt_builder,
         num_examples_per_prompt=num_examples_per_prompt,
+        problem_factory_builder=problem_factory_builder,
     )
 
 

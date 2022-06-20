@@ -20,7 +20,7 @@
 # https://semanticmachines.slack.com/archives/C01BZ09JLHL/p1611866365384800?thread_ts=1611773531.333600&cid=C01BZ09JLHL
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Generic, Iterable, List, Optional, Sized, Tuple, cast
+from typing import Generic, Iterable, List, Optional, Sequence, Sized, Tuple, cast
 
 from semantic_parsing_with_constrained_lm.earley.grammar import Terminal
 from semantic_parsing_with_constrained_lm.util.keydefaultdict import KeyDefaultDict
@@ -62,18 +62,21 @@ class Position(ABC, Sized, Generic[Terminal]):
         return len(self) < len(other)
 
 
-class ListPosition(Position[Terminal]):
-    """A position in a list of tokens."""
+class SequencePosition(Position[Terminal]):
+    """A position in a list of tokens.
 
-    def __init__(self, tokens: List[Terminal], i: int = 0):
-        self._tokens: List[Terminal] = tokens
+    WARNING: Do not modify the contents of `tokens` outside this class.
+    """
+
+    def __init__(self, tokens: Sequence[Terminal], i: int = 0):
+        self._tokens: Sequence[Terminal] = tokens
         self._i: int = i
 
-    def scan(self, terminal: Terminal) -> Iterable["ListPosition[Terminal]"]:
+    def scan(self, terminal: Terminal) -> Iterable["SequencePosition[Terminal]"]:
         if self.is_final() or self._tokens[self._i] != terminal:
             return ()
         else:
-            return (ListPosition[Terminal](self._tokens, self._i + 1),)
+            return (SequencePosition[Terminal](self._tokens, self._i + 1),)
 
     def is_final(self) -> bool:
         return self._i == len(self._tokens)
@@ -83,6 +86,21 @@ class ListPosition(Position[Terminal]):
 
     def __repr__(self) -> str:
         return str(self._i)
+
+    def __eq__(self, other: "SequencePosition[Terminal]") -> bool:
+        """Uses reference equality for self._tokens.
+
+        If you construct a separate SequencePosition from the same tokens,
+        but stored in a different container, they will not compare equal."""
+
+        return (
+            isinstance(other, SequencePosition)
+            and self._tokens is other._tokens
+            and self._i == other._i
+        )
+
+    def __hash__(self) -> int:
+        return hash((id(self._tokens), self._i))
 
 
 @dataclass(frozen=True)

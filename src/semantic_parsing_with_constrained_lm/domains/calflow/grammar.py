@@ -34,13 +34,13 @@ class Template:
         assert self.placeholders == replacements.keys()
         if self.whitespace_removed:
             return " ".join(
-                replacements[x.name] if isinstance(x, Placeholder) else f'"{x}"'
+                replacements[x.name] if isinstance(x, Placeholder) else f'" {x}"'
                 for x in self.template
                 if x
             )
         else:
             return " ".join(
-                replacements[x.name] if isinstance(x, Placeholder) else f'!"{x}"'
+                replacements[x.name] if isinstance(x, Placeholder) else f'"{x}"'
                 for x in self.template
                 if x
             )
@@ -374,28 +374,28 @@ def induce_grammar(
                         else "#e"
                     )
                 elif implicit_whitespace:
-                    arg_string_utterance_middle = ' "and" '.join(
-                        f'"{arg_name} set to" {nonterminal}'
+                    arg_string_utterance_middle = ' " and" '.join(
+                        f'" {arg_name} set to" {nonterminal}'
                         for arg_name, nonterminal in arg_name_to_nonterminal_names.items()
                     )
                     if arg_string_utterance_middle:
                         arg_string_utterance_middle = (
-                            ' "with" ' + arg_string_utterance_middle
+                            ' " with" ' + arg_string_utterance_middle
+                        )
+                    arg_string_utterance = (
+                        f'" (call {f.name}" {arg_string_utterance_middle} " )"'
+                    )
+                else:
+                    arg_string_utterance_middle = ' " and " '.join(
+                        f'"{arg_name} set to " {nonterminal}'
+                        for arg_name, nonterminal in arg_name_to_nonterminal_names.items()
+                    )
+                    if arg_string_utterance_middle:
+                        arg_string_utterance_middle = (
+                            ' " with " ' + arg_string_utterance_middle
                         )
                     arg_string_utterance = (
                         f'"(call {f.name}" {arg_string_utterance_middle} ")"'
-                    )
-                else:
-                    arg_string_utterance_middle = ' !" and " '.join(
-                        f'!"{arg_name} set to " {nonterminal}'
-                        for arg_name, nonterminal in arg_name_to_nonterminal_names.items()
-                    )
-                    if arg_string_utterance_middle:
-                        arg_string_utterance_middle = (
-                            ' !" with " ' + arg_string_utterance_middle
-                        )
-                    arg_string_utterance = (
-                        f'!"(call {f.name}" {arg_string_utterance_middle} !")"'
                     )
 
                 if f.named_args:
@@ -433,7 +433,7 @@ def induce_grammar(
                     grammar.append(
                         GrammarLine(
                             return_type,
-                            f'{return_type} -> "{f.field_name} of" {nonterminal} empty , " (:{f.field_name}" {nonterminal} ")" empty',
+                            f'{return_type} -> " {f.field_name} of" {nonterminal} empty , " (:{f.field_name}" {nonterminal} ")" empty',
                             {nonterminal},
                         )
                     )
@@ -441,7 +441,7 @@ def induce_grammar(
                     grammar.append(
                         GrammarLine(
                             return_type,
-                            f'{return_type} -> !"{f.field_name} of " {nonterminal} empty , " (:{f.field_name}" {nonterminal} ")" empty',
+                            f'{return_type} -> "{f.field_name} of " {nonterminal} empty , " (:{f.field_name}" {nonterminal} ")" empty',
                             {nonterminal},
                         )
                     )
@@ -464,7 +464,7 @@ def induce_grammar(
                         utterance = template.render({arg.name: arg_nonterminal})
                         if implicit_whitespace:
                             grammar_line_args_utt = (
-                                f"{utterance} {all_args_nonterminal}"
+                                f'" " {utterance} {all_args_nonterminal}'
                             )
                         else:
                             # Normally, expansions don't begin with a space when
@@ -474,9 +474,9 @@ def induce_grammar(
                             # as we may have zero arguments.
                             #
                             # Example:
-                            #  constraint_event_ -> !"event" constraint_event__constraint_event__args
+                            #  constraint_event_ -> "event" constraint_event__constraint_event__args
                             #  constraint_event__constraint_event__args -> constraint_list_attendee__ constraint_event__constraint_event__args
-                            #  constraint_event__constraint_event__args -> !" " !"for " constraint_duration_ constraint_event__constraint_event__args
+                            #  constraint_event__constraint_event__args -> " " "for " constraint_duration_ constraint_event__constraint_event__args
                             #
                             # With the above rules, we can parse all of:
                             # - "event",
@@ -487,7 +487,7 @@ def induce_grammar(
                             # and so on.
                             if f.type_template:
                                 grammar_line_args_utt = (
-                                    f'!" " {utterance} {all_args_nonterminal}'
+                                    f'" " {utterance} {all_args_nonterminal}'
                                 )
                             else:
                                 grammar_line_args_utt = (
@@ -500,7 +500,7 @@ def induce_grammar(
                         # that we can reproduce the old grammar exactly.
                         grammar_line_args_utt = f'" with {arg.name} set to" {arg_nonterminal}  {all_args_nonterminal}'
                     else:
-                        grammar_line_args_utt = f'!" with {arg.name} set to " {arg_nonterminal}  {all_args_nonterminal}'
+                        grammar_line_args_utt = f'" with {arg.name} set to " {arg_nonterminal}  {all_args_nonterminal}'
 
                     grammar_line_args_plan = (
                         f'" :{arg.name}" {arg_nonterminal}  {all_args_nonterminal}'
@@ -515,9 +515,9 @@ def induce_grammar(
 
                 if f.type_template:
                     if implicit_whitespace:
-                        type_template_str = f'"{f.type_template}"'
+                        type_template_str = f'" {f.type_template}"'
                     else:
-                        type_template_str = f'!"{f.type_template}"'
+                        type_template_str = f'"{f.type_template}"'
                 else:
                     type_template_str = ""
 

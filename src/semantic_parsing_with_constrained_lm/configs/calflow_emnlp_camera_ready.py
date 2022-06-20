@@ -22,10 +22,9 @@ It will generate the following experiments (depending on the value of eval_split
 	- GPT-2 Unconstrained Canonical
 	- GPT-2 Unconstrained Meaning
 """
-
+from pathlib import Path
 from typing import Any, Callable, Dict
 
-import torch
 from typing_extensions import Literal
 
 from semantic_parsing_with_constrained_lm.scfg.read_grammar import PreprocessedGrammar
@@ -40,8 +39,9 @@ from semantic_parsing_with_constrained_lm.eval import TopKExactMatch
 from semantic_parsing_with_constrained_lm.lm import TRAINED_MODEL_DIR, AutoregressiveModel, ClientType
 from semantic_parsing_with_constrained_lm.lm_bart import Seq2SeqBart
 from semantic_parsing_with_constrained_lm.lm_openai_gpt3 import IncrementalOpenAIGPT3
-from semantic_parsing_with_constrained_lm.paths import DOMAINS_DIR
+from semantic_parsing_with_constrained_lm.paths import CALFLOW_EXAMPLES_DIR, CALFLOW_GRAMMAR_DIR
 from semantic_parsing_with_constrained_lm.run_exp import EvalSplit, Experiment
+from semantic_parsing_with_constrained_lm.train_model_setup import BartModelConfig
 
 
 def build_config(
@@ -51,13 +51,10 @@ def build_config(
     **kwargs: Any,  # pylint: disable=unused-argument
 ) -> Dict[str, Callable[[], Experiment]]:
 
-    EXAMPLES_DIR = DOMAINS_DIR / "calflow/data"
     TRAIN_SIZE = 300
     BEAM_SIZE = 10
     use_gpt3 = model == ClientType.GPT3
-    preprocessed_grammar = PreprocessedGrammar.from_folder(
-        str(DOMAINS_DIR / "calflow/grammar")
-    )
+    preprocessed_grammar = PreprocessedGrammar.from_folder(str(CALFLOW_GRAMMAR_DIR))
     scfg = SCFG(preprocessed_grammar)
 
     def create_exp(
@@ -67,26 +64,28 @@ def build_config(
         output_type: CalflowOutputLanguage,
     ):
         train_data = cached_read_calflow_jsonl(
-            EXAMPLES_DIR / "train_300_stratified.jsonl", output_type,
+            CALFLOW_EXAMPLES_DIR / "train_300_stratified.jsonl", output_type
         )[:TRAIN_SIZE]
 
         if eval_split == EvalSplit.DevFull:
             test_data = cached_read_calflow_jsonl(
-                EXAMPLES_DIR / "dev_all.jsonl", output_type,
+                CALFLOW_EXAMPLES_DIR / "dev_all.jsonl", output_type
             )
         elif eval_split == EvalSplit.DevSubset:
             test_data = cached_read_calflow_jsonl(
-                EXAMPLES_DIR / "test_200_uniform.jsonl", output_type,
+                CALFLOW_EXAMPLES_DIR / "test_200_uniform.jsonl", output_type
             )
         elif eval_split == EvalSplit.TrainSubset:
             # Select a subset not already present in train
             ids_train_300 = set()
-            with open(EXAMPLES_DIR / "ids_train_300_stratified.txt", "r") as id_file:
+            with open(
+                CALFLOW_EXAMPLES_DIR / "ids_train_300_stratified.txt", "r"
+            ) as id_file:
                 for _, line in enumerate(id_file):
                     dialogue_id, turn_index = line.strip().split(",")
                     ids_train_300.add((dialogue_id.strip(), int(turn_index.strip())))
             train_data_1000_stratified = cached_read_calflow_jsonl(
-                EXAMPLES_DIR / "train_1000_stratified.jsonl", output_type,
+                CALFLOW_EXAMPLES_DIR / "train_1000_stratified.jsonl", output_type
             )
             test_data = [
                 datum
@@ -101,10 +100,16 @@ def build_config(
         if model == ClientType.GPT3:
             lm = IncrementalOpenAIGPT3()
         elif model == ClientType.BART:
+            model_loc = f"{TRAINED_MODEL_DIR}/calflow_{output_type}/checkpoint-10000/"
+            bart_model_config = BartModelConfig(
+                model_id="Bart", model_loc=Path(model_loc)
+            )
+            bart_model, clamp_tokenizer, _ = bart_model_config.setup_model()
             lm = Seq2SeqBart(
-                # Part after / is set to match lm_finetune.py
-                f"{TRAINED_MODEL_DIR}/20000/calflow_{output_type}/",
-                device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
+                # Model location set to match lm_finetune.py
+                pretrained_model_dir=model_loc,
+                model=bart_model,
+                clamp_tokenizer=clamp_tokenizer,
             )
         else:
             raise ValueError(model)

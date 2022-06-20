@@ -6,11 +6,12 @@ import os
 from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
-from typing import Generic, List, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Generic, List, Optional, Sequence, Tuple, TypeVar
 
 import jsons
 import torch
-from transformers import GPT2Tokenizer
+
+from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
 HS = TypeVar("HS")
 
@@ -42,9 +43,7 @@ class AutoregressiveModel(Generic[HS], ABC):
 
     @property
     @abc.abstractmethod
-    def tokenizer(self) -> GPT2Tokenizer:
-        # GPT-2, GPT-3, and BART all use the GPT-2 tokenizer, so we assume that here.
-        # However, other models like T5 and ZCode will require different tokenizers.
+    def tokenizer(self) -> ClampTokenizer:
         pass
 
     @abc.abstractmethod
@@ -54,6 +53,11 @@ class AutoregressiveModel(Generic[HS], ABC):
         hidden_state: HS,
         drop_next_hidden_state: bool = False,
     ) -> Tuple[torch.Tensor, HS]:
+        pass
+
+    @abc.abstractmethod
+    async def next_logprobs(self, hidden_state: HS) -> torch.Tensor:
+        """Returns the distribution over the next token given the tokens in the hidden state."""
         pass
 
     async def __aenter__(self):
@@ -89,7 +93,7 @@ class IncrementalLanguageModel(AutoregressiveModel[HS], ABC):
         tokens: Sequence[int],
         hidden_state: HS,
         drop_next_hidden_state: bool = False,
-    ) -> Tuple[torch.Tensor, HS]:
+    ) -> Tuple[torch.Tensor, Optional[HS]]:
         return await self.execute(tokens, hidden_state, drop_next_hidden_state)
 
     async def logprob_of_completion(
@@ -166,57 +170,41 @@ class Seq2SeqModel(AutoregressiveModel[HS], ABC):
 
 @dataclass
 class Surround:
-    bos: Union[List[int], str]
-    eos: Union[List[int], str]
+    bos: List[int]
+    eos: List[int]
+    starts_with_space: bool
 
 
 @dataclass
 class Seq2SeqSettings:
     input_surround: Surround
-    # - If output_surround.bos is a string, it must end with " " (for BART and other models using GPT2Tokenizer)
-    # - If output_surround.eos is a string, it must correspond to a single token in the vocabulary
     output_surround: Surround
+    decoder_start_token_id: Optional[int]
 
 
 @dataclass
 class Seq2SeqHelper:
     settings: Seq2SeqSettings
-    tokenizer: GPT2Tokenizer
+    tokenizer: ClampTokenizer
     decoder_start_token_ids: List[int]
     decoder_eos_token_id: int
     decoder_output_begins_with_space: bool
 
     @classmethod
     def from_settings_json(
-        cls, json_str: str, tokenizer: GPT2Tokenizer
+        cls, json_str: str, tokenizer: ClampTokenizer
     ) -> "Seq2SeqHelper":
         settings = jsons.loads(json_str, cls=Seq2SeqSettings)
+        decoder_start_token_ids = settings.output_surround.bos
+        if settings.decoder_start_token_id is not None:
+            decoder_start_token_ids = [
+                settings.decoder_start_token_id
+            ] + decoder_start_token_ids
 
-        decoder_output_begins_with_space = False
-        if isinstance(settings.output_surround.bos, str):
-            bos = settings.output_surround.bos
-            ids = tokenizer.encode(
-                settings.output_surround.bos, add_special_tokens=False
-            )
-            if bos:
-                assert bos[-1] == " "
-                decoder_start_token_ids = ids[:-1]
-                decoder_output_begins_with_space = True
-            else:
-                decoder_start_token_ids = ids
-        else:
-            decoder_start_token_ids = settings.output_surround.bos
-
-        if isinstance(settings.output_surround.eos, str):
-            byte_encoded_eos = "".join(
-                tokenizer.byte_encoder[b]
-                for b in settings.output_surround.eos.encode("utf-8")
-            )
-            # If KeyError is raised here, then eos was not a single token in the vocabulary
-            decoder_eos_token_id = tokenizer.encoder[byte_encoded_eos]
-        else:
-            [decoder_eos_token_id] = settings.output_surround.eos
-
+        # Output surround eos should be one token id, since that needs to be used to detect end of output sequence.
+        assert len(settings.output_surround.eos) == 1
+        decoder_eos_token_id = settings.output_surround.eos[0]
+        decoder_output_begins_with_space = settings.output_surround.starts_with_space
         return cls(
             settings,
             tokenizer,
@@ -226,38 +214,36 @@ class Seq2SeqHelper:
         )
 
     def encode_for_encoder(self, s: str) -> List[int]:
-        to_encode = []
-        if isinstance(self.settings.input_surround.bos, str):
-            to_encode.append(self.settings.input_surround.bos)
-        to_encode.append(s)
-        if isinstance(self.settings.input_surround.eos, str):
-            to_encode.append(self.settings.input_surround.eos)
-
-        token_ids = self.tokenizer.encode("".join(to_encode), add_special_tokens=False)
-
-        if isinstance(self.settings.input_surround.bos, list):
-            token_ids = self.settings.input_surround.bos + token_ids
-        if isinstance(self.settings.input_surround.eos, list):
-            token_ids = token_ids + self.settings.input_surround.eos
+        string_to_tokenize = s
+        if self.settings.input_surround.starts_with_space:
+            string_to_tokenize = " " + s
+        token_ids = (
+            self.settings.input_surround.bos
+            + list(self.tokenizer.encode(string_to_tokenize))
+            + self.settings.input_surround.eos
+        )
         return token_ids
 
     def encode_prefix_for_decoder(
         self, s: str, include_bos_ids: bool = True
     ) -> List[int]:
-        if s == "":
-            result = []
-        else:
-            result = self.tokenizer.encode(
-                " " + s if self.decoder_output_begins_with_space else s,
-                add_special_tokens=False,
-            )
+        string_to_tokenize = s
+        if self.settings.output_surround.starts_with_space:
+            string_to_tokenize = " " + s
+        token_ids = self.tokenizer.encode(string_to_tokenize)
         if include_bos_ids:
-            return self.decoder_start_token_ids + result
+            return self.decoder_start_token_ids + token_ids
         else:
-            return result
+            return token_ids
 
     def decode_output(self, ids: Sequence[int]) -> str:
-        output = self.tokenizer.decode(ids, clean_up_tokenization_spaces=False)
+        output = self.tokenizer.decode(list(ids))
         if self.decoder_output_begins_with_space and output[0] == " ":
             output = output[1:]
         return output
+
+
+@dataclass
+class TokensWithLogprobs:
+    token_ids: torch.Tensor
+    logprobs: torch.Tensor

@@ -14,7 +14,6 @@ from typing import (
     FrozenSet,
     Generic,
     Iterable,
-    Iterator,
     List,
     Mapping,
     Optional,
@@ -24,19 +23,11 @@ from typing import (
     Union,
 )
 
-import more_itertools
-from transformers import GPT2Tokenizer
+from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
-TrainDatum = TypeVar("TrainDatum", contravariant=True)
-TestDatum = TypeVar("TestDatum", contravariant=True)
+TrainDatum = TypeVar("TrainDatum")
+TestDatum = TypeVar("TestDatum")
 T = TypeVar("T")
-
-
-def permute_and_chunk(
-    rand: random.Random, pairs: List[T], prompt_size: int
-) -> Iterator[List[T]]:
-    rand.shuffle(pairs)
-    return more_itertools.chunked(pairs, prompt_size)
 
 
 @dataclass(frozen=True, eq=True)
@@ -180,7 +171,7 @@ class PromptBuilder(Generic[TrainDatum, TestDatum]):
             field_to_adornment["agent_context"] = Adornment("Agent: ", "\n")
         return PromptBuilder(
             problem_spec=ProblemSpec(
-                input_fields=frozenset(input_field_order), output_field="canonical",
+                input_fields=frozenset(input_field_order), output_field="canonical"
             ),
             preamble="Let's translate what a human user says into what a computer might say.\n\n"
             if use_preamble
@@ -191,10 +182,19 @@ class PromptBuilder(Generic[TrainDatum, TestDatum]):
         )
 
 
-class TrainSelectorStage(Generic[TrainDatum, TestDatum]):
+class DataRetriever(Generic[TrainDatum, TestDatum]):
+    """
+    A selector that selects prompts from a pre-built index.
+    """
+
+    async def __call__(self, test_datum: TestDatum) -> Sequence[TrainDatum]:
+        raise NotImplementedError
+
+
+class DataFilter(Generic[TrainDatum, TestDatum]):
     async def __call__(
-        self, train_data: Sequence[Sequence[TrainDatum]], test_datum: TestDatum
-    ) -> Sequence[Sequence[TrainDatum]]:
+        self, train_data: Sequence[TrainDatum], test_datum: TestDatum
+    ) -> Sequence[TrainDatum]:
         """
         train_data:
         - outer Sequence: "train data pieces", or in other words,
@@ -207,67 +207,55 @@ class TrainSelectorStage(Generic[TrainDatum, TestDatum]):
 
 
 @dataclass
-class TopKSimilar(TrainSelectorStage[TrainDatum, TestDatum]):
-    """ "Retrieves the top K similar examples according to a scoring function."""
+class TopKSimilar(DataRetriever[TrainDatum, TestDatum]):
+    """Retrieves the top K similar examples according to a scoring function."""
 
+    train_data: Sequence[TrainDatum]
     scorer: Callable[[TrainDatum, TestDatum], Awaitable[float]]
     k: int
     best_first: bool = True
 
-    async def __call__(
-        self, train_data: Sequence[Sequence[TrainDatum]], test_datum: TestDatum
-    ) -> Sequence[Sequence[TrainDatum]]:
-        assert len(train_data) == 1
-        (train_data_piece,) = train_data
+    async def __call__(self, test_datum: TestDatum) -> Sequence[TrainDatum]:
         if self.k == 0:
-            return [[]]
+            return []
 
         # First we get the top-scoring K TrainDatums
         scores = await asyncio.gather(
-            *[self.scorer(train_datum, test_datum) for train_datum in train_data_piece]  # type: ignore
+            *[self.scorer(train_datum, test_datum) for train_datum in self.train_data]  # type: ignore
         )
-        sorted_datums = list(zip(train_data_piece, scores))
-        sorted_datums.sort(reverse=self.best_first, key=operator.itemgetter(1))
-        if self.best_first:
-            relevant_datums = sorted_datums[: self.k]
-        else:
-            relevant_datums = sorted_datums[-self.k :]
-        result = tuple(example for example, _ in relevant_datums)
+        sorted_data = list(zip(self.train_data, scores))
+        sorted_data.sort(reverse=self.best_first, key=operator.itemgetter(1))
+        relevant_data = (
+            sorted_data[: self.k] if self.best_first else sorted_data[-self.k :]
+        )
+        result = tuple(example for example, _ in relevant_data)
 
-        return [result]
+        return result
 
 
 @dataclass
-class ShuffleAndSampleChunks(TrainSelectorStage[TrainDatum, TestDatum]):
-    # Number of train data pieces to return.
-    num_samples: int
+class ShuffleAndSample(DataFilter[TrainDatum, TestDatum]):
     # Number of train datums to put in each piece.
     num_per_sample: int
     random_seed: int
 
     async def __call__(
-        self, train_data: Sequence[Sequence[TrainDatum]], _test_datum: TestDatum
-    ) -> Sequence[Sequence[TrainDatum]]:
-        assert len(train_data) == 1
-        (train_data_piece,) = train_data
+        self, train_data: Sequence[TrainDatum], _test_datum: TestDatum
+    ) -> Sequence[TrainDatum]:
         if self.num_per_sample == 0:
-            return [[]] * self.num_samples
+            return []
 
         shuffle_rand = random.Random(self.random_seed)
-        return [
-            prompt
-            for _ in range(self.num_samples)
-            for prompt in permute_and_chunk(
-                shuffle_rand, list(train_data_piece), self.num_per_sample
-            )
-        ]
+        data = list(train_data)
+        shuffle_rand.shuffle(data)
+        return data[: self.num_per_sample]
 
 
 MAX_TOKEN_LENGTH = 2048
 
 
 @dataclass
-class TruncateTokenLength(TrainSelectorStage[TrainDatum, TestDatum]):
+class TruncateTokenLength(DataFilter[TrainDatum, TestDatum]):
     """
     Truncates each train data group so that the prompt is no more than MAX_TOKEN_LENGTH - completion_length
     long.
@@ -278,7 +266,7 @@ class TruncateTokenLength(TrainSelectorStage[TrainDatum, TestDatum]):
     # Upper bound on length of the GPT3 completion.
     completion_length: int
 
-    tokenizer: GPT2Tokenizer
+    tokenizer: ClampTokenizer
 
     # If True, truncate the first items in the group.
     reverse: bool = False
@@ -288,19 +276,18 @@ class TruncateTokenLength(TrainSelectorStage[TrainDatum, TestDatum]):
         self.max_test_length = MAX_TOKEN_LENGTH - self.completion_length
 
     async def __call__(
-        self, train_data: Sequence[Sequence[TrainDatum]], test_datum: TestDatum
-    ) -> Sequence[Sequence[TrainDatum]]:
-        result = []
-        for train in train_data:
-            if self.reverse:
-                result.append(self._build_group_reverse(train, test_datum))
-            else:
-                result.append(self._build_group_forward(train, test_datum))
-        return result
+        self, train_data: Sequence[TrainDatum], test_datum: TestDatum
+    ) -> Sequence[TrainDatum]:
+        return (
+            self._build_group_reverse(train_data, test_datum)
+            if self.reverse
+            else self._build_group_forward(train_data, test_datum)
+        )
 
     def _build_group_forward(
         self, train: Sequence[TrainDatum], test_datum: TestDatum
     ) -> Sequence[TrainDatum]:
+        num_pruned_examples = 0
         group: List[TrainDatum] = []
         for t in train:
             if (
@@ -312,11 +299,17 @@ class TruncateTokenLength(TrainSelectorStage[TrainDatum, TestDatum]):
                 < self.max_test_length
             ):
                 group.append(t)
+            else:
+                num_pruned_examples += 1
+
+        if num_pruned_examples > 0:
+            print(f"Prompt creation had to be cut off {num_pruned_examples} examples")
         return group
 
     def _build_group_reverse(
         self, train: Sequence[TrainDatum], test_datum: TestDatum
     ) -> Sequence[TrainDatum]:
+        num_pruned_examples = 0
         group: List[TrainDatum] = []
         for t in reversed(train):
             if (
@@ -328,6 +321,11 @@ class TruncateTokenLength(TrainSelectorStage[TrainDatum, TestDatum]):
                 < self.max_test_length
             ):
                 group = [t] + group
+            else:
+                num_pruned_examples += 1
+
+        if num_pruned_examples > 0:
+            print(f"Prompt creation had to be cut off {num_pruned_examples} examples")
         return group
 
 
@@ -339,7 +337,7 @@ class InvalidForGPT2Tokenizer(Exception):
 class GPT2TokenizerQuirks:
     """Methods for handling unintuitive consequences of GPT-2 tokenization."""
 
-    tokenizer: GPT2Tokenizer
+    tokenizer: ClampTokenizer
     space_tokens: Optional[Set[int]] = None
     prompt_ends_in_space: Optional[bool] = None
 
@@ -370,8 +368,8 @@ class GPT2TokenizerQuirks:
         if self.space_tokens is None:
             self.space_tokens = {
                 i
-                for token, i in self.tokenizer.encoder.items()
-                if token.startswith(self.tokenizer.byte_encoder[32])
+                for token, i in self.tokenizer.utf8_token_to_id_map.items()
+                if token.startswith(b" ")
             }
 
         if can_end:

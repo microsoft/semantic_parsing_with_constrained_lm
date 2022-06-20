@@ -13,10 +13,13 @@ Currently there are 2 implementations:
 - UTF8EarleyPartialParse
   - Like EarleyPartialParse, but uses UTF-8 encoded byte strings as the
     underlying.
+
+TODO: Replace all uses of the above with UInt8EarleyPartialParse.
 """
 import collections
 import dataclasses
 import itertools
+from abc import abstractmethod
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -35,21 +38,23 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    cast,
 )
 
 import torch
 from cached_property import cached_property
-from transformers import GPT2Tokenizer
 
 from semantic_parsing_with_constrained_lm.earley.agenda import Item
 from semantic_parsing_with_constrained_lm.earley.earley import EarleyChart
 from semantic_parsing_with_constrained_lm.earley.grammar import Grammar
 from semantic_parsing_with_constrained_lm.earley.input import Position
+from semantic_parsing_with_constrained_lm.util.trie import Trie, TrieSetNode
 from semantic_parsing_with_constrained_lm.scfg.char_grammar import Char
 from semantic_parsing_with_constrained_lm.scfg.earley_grammar import CFTerminal, EarleyCFGrammar
 from semantic_parsing_with_constrained_lm.scfg.parser.token import RegexToken
 from semantic_parsing_with_constrained_lm.scfg.read_grammar import PreprocessedGrammar
-from semantic_parsing_with_constrained_lm.search import PartialParse
+from semantic_parsing_with_constrained_lm.decoding.partial_parse import PartialParse
+from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
 
 @dataclass(frozen=True)
@@ -71,7 +76,8 @@ class CFPosition(Position[CFTerminal]):
         ):
             return (
                 CFPosition(
-                    self.content[:-1] + (self.content[-1] + terminal,),
+                    # We already checked self.content[-1] is str, but pyright is confused
+                    self.content[:-1] + (cast(str, self.content[-1]) + terminal,),
                     _prev=self,
                     _last=terminal,
                 ),
@@ -107,84 +113,78 @@ class CFPositionWithCopyInfo:
 
 @dataclass
 class GrammarTokenizerInfo:
-    grammar: Grammar[CFTerminal]
-    id_to_token: Dict[int, str]
-    id_to_utf8_token: Dict[int, bytes]
+    grammar: Grammar[CFTerminal, Any]
+    # TODO (richard): make 2d ndarray of chars?
+    tokens: List[str]
+    tokens_to_id: Dict[str, int]
+    utf8_tokens: List[bytes]
+    utf8_tokens_to_id: Dict[bytes, int]
+    utf8_trie: Trie[int]  # should be Trie[byte] but Python does not have a `byte` type
     start_position: CFPosition = CFPosition()
 
-    @classmethod
+    @staticmethod
     def create(
-        cls,
-        tokenizer: GPT2Tokenizer,
+        tokenizer: ClampTokenizer,
         preprocessed_grammar: PreprocessedGrammar,
         for_plans: bool,
     ) -> "GrammarTokenizerInfo":
-        grammar = cls._preproc_to_grammar(preprocessed_grammar, for_plans)
+        utf8_token_map = tokenizer.id_to_utf8_token_map
+        n = max(utf8_token_map.keys()) + 1
+        assert set(utf8_token_map.keys()) == set(range(n))
+        utf8_tokens: List[bytes] = [utf8_token_map[i] for i in range(n)]
+        return GrammarTokenizerInfo.from_utf8_tokens_list(
+            utf8_tokens, preprocessed_grammar, for_plans
+        )
 
-        id_to_token: Dict[int, str] = {}
-        id_to_utf8_token: Dict[int, bytes] = {}
-        # encoded_token: UTF-8 encoded strings where bytes corresponding to
-        # control characters in ASCII have been mapped to other characters
-        for encoded_token, token_id in tokenizer.encoder.items():
-            # token_bytes: UTF-8 encoded string
-            token_bytes = bytes(tokenizer.byte_decoder[c] for c in encoded_token)
-            id_to_utf8_token[token_id] = token_bytes
-            try:
-                token = token_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                # Sometimes token_bytes is cut off inside a UTF-8 byte sequence
-                # for a single Unicode character.
-                # We just discard those tokens for `token_trie` and `id_to_token`.
-                continue
-            id_to_token[token_id] = token
-
-        return GrammarTokenizerInfo(grammar, id_to_token, id_to_utf8_token)
-
-    @classmethod
+    @staticmethod
     def from_tokens_list(
-        cls,
-        tokens: List[str],
-        preprocessed_grammar: PreprocessedGrammar,
-        for_plans: bool,
+        tokens: List[str], preprocessed_grammar: PreprocessedGrammar, for_plans: bool
     ) -> "GrammarTokenizerInfo":
-        grammar = cls._preproc_to_grammar(preprocessed_grammar, for_plans)
-        id_to_token = dict(enumerate(tokens))
-        id_to_utf8_token = {i: token.encode("utf-8") for i, token in enumerate(tokens)}
-        return GrammarTokenizerInfo(grammar, id_to_token, id_to_utf8_token)
+        grammar = GrammarTokenizerInfo._preproc_to_grammar(
+            preprocessed_grammar, for_plans
+        )
+        utf8_tokens = [token.encode("utf-8") for token in tokens]
+        tokens_to_id: Dict[str, int] = {t: i for i, t in enumerate(tokens)}
+        utf8_trie: Trie[int] = Trie(utf8_tokens)
+        utf8_tokens_to_id = {t: i for i, t in enumerate(utf8_tokens)}
+        return GrammarTokenizerInfo(
+            grammar, tokens, tokens_to_id, utf8_tokens, utf8_tokens_to_id, utf8_trie
+        )
 
-    @classmethod
+    @staticmethod
     def from_utf8_tokens_list(
-        cls,
         utf8_tokens: List[bytes],
         preprocessed_grammar: PreprocessedGrammar,
         for_plans: bool,
     ) -> "GrammarTokenizerInfo":
-        grammar = cls._preproc_to_grammar(preprocessed_grammar, for_plans)
-        id_to_token: Dict[int, str] = {}
-        for i, utf8_token in enumerate(utf8_tokens):
-            try:
-                token = utf8_token.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            id_to_token[i] = token
-        id_to_utf8_token = dict(enumerate(utf8_tokens))
-        return GrammarTokenizerInfo(grammar, id_to_token, id_to_utf8_token)
+        grammar = GrammarTokenizerInfo._preproc_to_grammar(
+            preprocessed_grammar, for_plans
+        )
+        tokens: List[str] = [
+            s.decode("utf-8", errors="backslashreplace") for s in utf8_tokens
+        ]
+        tokens_to_id: Dict[str, int] = {t: i for i, t in enumerate(tokens)}
+        utf8_trie: Trie[int] = Trie(utf8_tokens)
+        utf8_tokens_to_id = {t: i for i, t in enumerate(utf8_tokens)}
+        return GrammarTokenizerInfo(
+            grammar, tokens, tokens_to_id, utf8_tokens, utf8_tokens_to_id, utf8_trie
+        )
 
-    @classmethod
+    @staticmethod
     def _preproc_to_grammar(
-        cls, preprocessed_grammar: PreprocessedGrammar, for_plans: bool,
+        preprocessed_grammar: PreprocessedGrammar, for_plans: bool
     ) -> EarleyCFGrammar:
-        if for_plans:
-            rules = preprocessed_grammar.all_plan_rules
-        else:
-            rules = preprocessed_grammar.all_utterance_rules
-        grammar = EarleyCFGrammar.from_preprocessed_rules(rules)
-        return grammar
+        rules = (
+            preprocessed_grammar.all_plan_rules
+            if for_plans
+            else preprocessed_grammar.all_utterance_rules
+        )
+        return EarleyCFGrammar.from_preprocessed_rules(rules)
 
 
 @dataclass
 class GrammarNodeInfo(Generic[AnyStr]):
-    chart: EarleyChart[CFTerminal] = dataclasses.field(repr=False)
+    chart: EarleyChart[CFTerminal, Any] = dataclasses.field(repr=False)
     start_position: Position[CFTerminal] = dataclasses.field(repr=False)
     input_utterance: AnyStr
     # Only used when input_utterance is bytes.
@@ -215,7 +215,9 @@ class LazyGrammarNodeBase(Generic[AnyStr, AnyChar]):
     # Stores information about all leaves of the trie rooted at this node, in a flattened way.
     descendants: DefaultDict[
         Tuple[int, AnyStr],
-        DefaultDict[Tuple[CFPositionWithCopyInfo, CFTerminal], List[Item[CFTerminal]]],
+        DefaultDict[
+            Tuple[CFPositionWithCopyInfo, CFTerminal], List[Item[CFTerminal, Any]]
+        ],
     ] = dataclasses.field(
         default_factory=lambda: collections.defaultdict(
             lambda: collections.defaultdict(list)
@@ -224,14 +226,18 @@ class LazyGrammarNodeBase(Generic[AnyStr, AnyChar]):
     # Stores all regex terminals that could occur next after this node,
     # and the Items that we need to advance with if we scan that regex.
     regexes: Optional[
-        DefaultDict[Tuple[CFPositionWithCopyInfo, RegexToken], List[Item[CFTerminal]]]
+        DefaultDict[
+            Tuple[CFPositionWithCopyInfo, RegexToken], List[Item[CFTerminal, Any]]
+        ]
     ] = None
 
     # Stores all terminals that are completed at this node, and the Items that
     # we need to advance with to determine what can come next according to the
     # grammar.
     finished_terminals: Optional[
-        DefaultDict[Tuple[CFPositionWithCopyInfo, CFTerminal], List[Item[CFTerminal]]]
+        DefaultDict[
+            Tuple[CFPositionWithCopyInfo, CFTerminal], List[Item[CFTerminal, Any]]
+        ]
     ] = None
 
     @cached_property
@@ -253,7 +259,7 @@ class LazyGrammarNodeBase(Generic[AnyStr, AnyChar]):
                     )
                 )
             else:
-                result.add(CFPositionWithCopyInfo(next_pos,))
+                result.add(CFPositionWithCopyInfo(next_pos))
         return result
 
     def process_terminal(self, t: str) -> AnyStr:
@@ -288,9 +294,12 @@ class LazyGrammarNodeBase(Generic[AnyStr, AnyChar]):
         result: Dict[AnyChar, LGN] = {}
         # TODO: Do less work when len(self.descendants) is 1
         for (num_prev_chars, terminal), scan_infos in self.descendants.items():
+            # print(self.depth, num_prev_chars, len(terminal), terminal)
+            if len(terminal) == 0:
+                continue
             next_node = result.setdefault(
                 terminal[self.depth - num_prev_chars],
-                type(self)(self.info, next_depth,),
+                type(self)(self.info, next_depth),
             )
             if num_prev_chars + len(terminal) == next_depth:
                 if next_node.finished_terminals:
@@ -323,7 +332,9 @@ class LazyGrammarNodeRegexChildrenBase(Mapping[AnyChar, LGN]):
     """Used for LazyGrammarNode.children when regexes are involved."""
 
     underlying: Dict[AnyChar, LGN]
-    regexes: Dict[Tuple[CFPositionWithCopyInfo, RegexToken], List[Item[CFTerminal]]]
+    regexes: Dict[
+        Tuple[CFPositionWithCopyInfo, RegexToken], List[Item[CFTerminal, Any]]
+    ]
 
     info: GrammarNodeInfo
     next_depth: int
@@ -358,11 +369,11 @@ class LazyGrammarNodeRegexChildrenBase(Mapping[AnyChar, LGN]):
                     continue
 
                 node = self.underlying.setdefault(
-                    c, self.lazy_grammar_node_type(self.info, self.next_depth,),
+                    c, self.lazy_grammar_node_type(self.info, self.next_depth)
                 )
                 if node.finished_terminals is None:
                     node.finished_terminals = collections.defaultdict(list)
-                node.finished_terminals[new_position, regex_token,].extend(chart_items)
+                node.finished_terminals[new_position, regex_token].extend(chart_items)
             self._regex_processed.add(c)
 
         return self.underlying[c]
@@ -470,30 +481,28 @@ EPP = TypeVar("EPP", bound="EarleyPartialParseBase")
 class EarleyPartialParseBase(Generic[AnyStr, LGN], PartialParse):
     info: GrammarTokenizerInfo
     grammar_node: LGN
-    _next_node_cache: Dict[int, LGN] = dataclasses.field(default_factory=dict)
+    tokens: List[AnyStr]
+    _next_node_cache: Dict[int, Optional[LGN]] = dataclasses.field(default_factory=dict)
 
-    _lazy_grammar_node_type: ClassVar[Type[LGN]]
+    _lazy_grammar_node_type: ClassVar[Type[LazyGrammarNodeBase]]
 
     @classmethod
     def _process_input_utterance(cls, input_utterance: str) -> AnyStr:
         raise NotImplementedError
 
-    def _id_to_token(self, i: int) -> Optional[AnyStr]:
-        raise NotImplementedError
-
     @classmethod
-    def initial(cls, info: GrammarTokenizerInfo, input_utterance: str):
-        chart = EarleyChart(info.grammar)
+    def _initial_node(cls, info: GrammarTokenizerInfo, input_utterance: str) -> LGN:
+        chart = EarleyChart(info.grammar, use_backpointers=False)
         chart.seek(info.grammar.root, info.start_position)
 
-        grammar_node = cls._lazy_grammar_node_type(
+        grammar_node: LGN = cls._lazy_grammar_node_type(
             info=GrammarNodeInfo(
                 chart,
                 info.start_position,
                 cls._process_input_utterance(input_utterance),
             ),
             depth=0,
-        )
+        )  # type: ignore
 
         start = CFPositionWithCopyInfo(info.start_position)
         for next_terminal, next_items in chart.advance_only_nonterminals(
@@ -510,70 +519,131 @@ class EarleyPartialParseBase(Generic[AnyStr, LGN], PartialParse):
                 ].extend(next_items)
             else:
                 raise ValueError(next_terminal)
-        return cls(info, grammar_node)
+        return grammar_node
+
+    @staticmethod
+    @abstractmethod
+    def initial(info: GrammarTokenizerInfo, input_utterance: str):
+        raise NotImplementedError
 
     def allowed_next(
-        self, ordered_ids: Optional[torch.Tensor] = None, top_k: Optional[int] = None
+        self,
+        ordered_ids: Optional[torch.Tensor] = None,
+        top_k: Optional[int] = None,
+        first_n_tokens_from_lm_to_check: int = 100,
+        enable_fallback_from_grammar: bool = True,
     ) -> Tuple[Optional[torch.Tensor], bool]:
+
         assert ordered_ids is not None
         ordered_ids_list = ordered_ids.tolist()
+        all_tokens = self.tokens
+        vocab_size = len(all_tokens)
+        grammar_node = self.grammar_node
 
-        def process_token_id(i: int) -> bool:
-            token_str = self._id_to_token(i)
-            if token_str is None:
+        def token_id_is_valid(i: int) -> bool:
+            if not 0 <= i < vocab_size:
                 return False
-            grammar_node = self.grammar_node
-
+            token_str = all_tokens[i]
+            result = grammar_node
             valid_token = True
             for token_char in token_str:
                 # Advance the grammar terminal trie
                 # TODO: Skip forward multiple characters if possible
-                grammar_node = grammar_node.children.get(token_char)
-                if grammar_node is None:
+                result = result.children.get(token_char)
+                if result is None:
                     valid_token = False
                     break
 
-            self._next_node_cache[i] = grammar_node
+            self._next_node_cache[i] = result
             return valid_token
 
         def produce_valid_tokens() -> Iterator[int]:
-            for i in ordered_ids_list:
-                is_valid = process_token_id(i)
-                if is_valid:
+            for i in itertools.islice(
+                ordered_ids_list, first_n_tokens_from_lm_to_check
+            ):
+                if token_id_is_valid(i):
                     yield i
 
+        def valid_tokens_from_grammar() -> Iterator[int]:
+            """Intersects the grammar trie with the vocabulary trie to get valid next tokens."""
+
+            def _traverse(
+                current_grammar_node: LGN, current_trie_node: TrieSetNode, prefix: bytes
+            ) -> Iterator[bytes]:
+                if current_trie_node.is_terminal:
+                    yield prefix
+                grammar_children = current_grammar_node.children
+                trie_children = current_trie_node.children
+                for n in grammar_children.keys() & trie_children.keys():  # intersection
+                    prefix_next = bytearray(prefix)
+                    prefix_next.append(n)
+                    yield from _traverse(
+                        grammar_children[n], trie_children[n], bytes(prefix_next)
+                    )
+
+            return (
+                self.info.utf8_tokens_to_id[x]
+                for x in _traverse(grammar_node, self.info.utf8_trie.root, bytes())
+            )
+
+        # TODO: Special case where grammar_node.children has no elements
+        # (i.e. tokens_list will be empty)
         tokens_list = list(itertools.islice(produce_valid_tokens(), top_k))
-        return (
-            torch.tensor(tokens_list, dtype=torch.long),
-            self.grammar_node.can_end,
-        )
+        k = top_k if top_k is not None else len(tokens_list)
+        if len(tokens_list) < k and enable_fallback_from_grammar:
+            # fallback to trie-based search for valid next tokens
+            valid_tokens: Set[int] = set(valid_tokens_from_grammar())
+            sorted_valid_tokens: List[int] = []
+            for token in ordered_ids_list:
+                if token in valid_tokens:
+                    sorted_valid_tokens.append(token)
+                if len(sorted_valid_tokens) >= k:
+                    break
+            tokens_list = sorted_valid_tokens
+
+        return torch.tensor(tokens_list, dtype=torch.long), self.grammar_node.can_end
 
     def append(self: EPP, token: int) -> EPP:
         grammar_node = self._next_node_cache.get(token)
         if grammar_node is None:
             grammar_node = self.grammar_node
-            for char in self.info.id_to_token[token]:
+            if not 0 <= token < len(self.tokens):
+                raise ValueError("token was not in the vocabulary")
+            token_str = self.tokens[token]
+            for char in token_str:
                 grammar_node = grammar_node.children[char]
-        return type(self)(self.info, grammar_node)
+        return type(self)(self.info, grammar_node, self.tokens)
 
 
 class EarleyPartialParse(EarleyPartialParseBase[str, LazyGrammarNode]):
+    """This class is deprecated. Try to use UInt8EarleyPartialParse instead."""
+
     _lazy_grammar_node_type: ClassVar[Type[LazyGrammarNode]] = LazyGrammarNode
 
     @classmethod
     def _process_input_utterance(cls, input_utterance: str) -> str:
         return input_utterance
 
-    def _id_to_token(self, i: int) -> str:
-        return self.info.id_to_token.get(i)
+    @staticmethod
+    def initial(
+        info: GrammarTokenizerInfo, input_utterance: str
+    ) -> "EarleyPartialParse":
+        grammar_node = EarleyPartialParse._initial_node(info, input_utterance)
+        return EarleyPartialParse(info, grammar_node, info.tokens)
 
 
 class UTF8EarleyPartialParse(EarleyPartialParseBase[bytes, UTF8LazyGrammarNode]):
+    """This class is deprecated. Try to use UInt8EarleyPartialParse instead."""
+
     _lazy_grammar_node_type: ClassVar[Type[UTF8LazyGrammarNode]] = UTF8LazyGrammarNode
 
     @classmethod
     def _process_input_utterance(cls, input_utterance: str) -> bytes:
         return input_utterance.encode("utf-8")
 
-    def _id_to_token(self, i: int) -> bytes:
-        return self.info.id_to_utf8_token[i]
+    @staticmethod
+    def initial(
+        info: GrammarTokenizerInfo, input_utterance: str
+    ) -> "UTF8EarleyPartialParse":
+        grammar_node = UTF8EarleyPartialParse._initial_node(info, input_utterance)
+        return UTF8EarleyPartialParse(info, grammar_node, info.utf8_tokens)

@@ -317,7 +317,7 @@ def main(
                     denotation = None
 
                 canonical_dict[paraphrase_group.canonical] = CanonicalInfo(
-                    paraphrase_group.paraphrases, formula, denotation,
+                    paraphrase_group.paraphrases, formula, denotation
                 )
 
             with open(output_dir / f"{dataset_name}.canonical.json", "w") as f:

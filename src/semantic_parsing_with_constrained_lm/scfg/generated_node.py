@@ -2,15 +2,14 @@
 # Licensed under the MIT License.
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import lark
-from pydantic.dataclasses import dataclass
 
 from semantic_parsing_with_constrained_lm.scfg.parser.types import Alias
 
 
-@dataclass(frozen=True)
 class GeneratedNode(ABC):
     @abstractmethod
     def render(self, with_treebank: bool = True) -> str:
@@ -167,6 +166,7 @@ class GeneratedNonterminalNode(GeneratedNode):
         return False
 
     def to_lark_tree(self) -> lark.Tree:
+        assert self.alias is not None
         return lark.Tree(
             self.alias,
             [

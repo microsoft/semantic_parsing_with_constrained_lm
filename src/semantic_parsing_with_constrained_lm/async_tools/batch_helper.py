@@ -7,7 +7,7 @@ from abc import ABC
 from dataclasses import dataclass
 from typing import Callable, Dict, Generic, List, Tuple, TypeVar, Union
 
-from semantic_parsing_with_constrained_lm.util.missing_sentinel import MISSING_SENTINEL, MissingSentinel
+from semantic_parsing_with_constrained_lm.util.unit import UNIT, Unit
 from semantic_parsing_with_constrained_lm.async_tools.limits import TimeoutBarrier
 
 I = TypeVar("I")
@@ -48,7 +48,7 @@ class PendingContainer(Generic[I, O]):
 
     inputs: List[I] = dataclasses.field(default_factory=list)
     barrier: TimeoutBarrier = dataclasses.field(init=False)
-    result: Union[O, MissingSentinel] = MISSING_SENTINEL
+    result: Union[O, Unit] = UNIT
 
     def __post_init__(self):
         self.barrier = TimeoutBarrier(
@@ -59,14 +59,12 @@ class PendingContainer(Generic[I, O]):
         i = len(self.inputs)
         self.inputs.append(inp)
         await self.barrier.arrive_and_wait()
-        assert not isinstance(self.result, MissingSentinel)
+        assert not isinstance(self.result, Unit)
         return self.result, i
 
     @property
     def closed(self) -> bool:
-        return bool(
-            self.barrier.currently_releasing or self.result is not MISSING_SENTINEL
-        )
+        return bool(self.barrier.currently_releasing or self.result is not UNIT)
 
     async def _execute(self) -> None:
         self.result = await self.batch_key.execute(self.inputs)
@@ -79,10 +77,10 @@ class PendingContainer(Generic[I, O]):
 class BatchingHelper(Generic[I, O]):
     """Helper for running functions on batched inputs."""
 
-    # Creates a BatchMaker from the input. Inputs with the same BatchKey are eligible for batching together.
+    # Creates a BatchMaker from the input. Inputs with BatchMakers that compare equal are eligible for batching together.
     input_to_batch_maker: Callable[[I], BatchMaker[I, O]]
 
-    # Pending operations per BatchKey.
+    # Pending operations per BatchMaker.
     pending: Dict[BatchMaker[I, O], PendingContainer[I, O]] = dataclasses.field(
         default_factory=dict
     )

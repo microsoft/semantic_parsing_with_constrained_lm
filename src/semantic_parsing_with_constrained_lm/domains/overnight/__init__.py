@@ -2,17 +2,19 @@
 # Licensed under the MIT License.
 
 import json
-import pathlib
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List
 
-from transformers import PreTrainedTokenizer
+from blobfile import BlobFile
 
 from semantic_parsing_with_constrained_lm.util.trie import Trie
+from semantic_parsing_with_constrained_lm.util.types import StrPath
 from semantic_parsing_with_constrained_lm.datum import Datum, FullDatum
+from semantic_parsing_with_constrained_lm.decoding.trie_partial_parse import TriePartialParse
+from semantic_parsing_with_constrained_lm.domains.calflow.write_data import CACHE_DIR
 from semantic_parsing_with_constrained_lm.eval import TopKExactMatch
-from semantic_parsing_with_constrained_lm.trie_partial_parse import TriePartialParse
+from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
 
 class OutputType(str, Enum):
@@ -40,11 +42,12 @@ class OvernightPieces:
     test_data: List[FullDatum]
     partial_parse_builder: Callable[[Datum], TriePartialParse]
     denotation_metric: TopKDenotationMatch
+    max_length: int
 
     @staticmethod
     def from_dir(
-        tokenizer: PreTrainedTokenizer,
-        root_dir: pathlib.Path,
+        tokenizer: ClampTokenizer,
+        root_dir: StrPath,
         domain: str,
         is_dev: bool,
         k: int,
@@ -52,8 +55,40 @@ class OvernightPieces:
         simplify_logical_forms=False,
         prefix_with_space=False,
     ) -> "OvernightPieces":
+        data_pieces = OvernightDataPieces.from_dir(
+            root_dir, domain, is_dev, output_type, simplify_logical_forms
+        )
+        decoder_pieces = OvernightDecoderPieces.create(
+            data_pieces, tokenizer, k, prefix_with_space
+        )
+
+        return OvernightPieces(
+            data_pieces.train_data,
+            data_pieces.test_data,
+            # https://github.com/python/mypy/issues/5485
+            decoder_pieces.partial_parse_builder,  # type: ignore
+            decoder_pieces.denotation_metric,
+            decoder_pieces.max_length,
+        )
+
+
+@dataclass
+class OvernightDataPieces:
+    train_data: List[FullDatum]
+    test_data: List[FullDatum]
+    target_output_to_denotation: Dict[str, str]
+
+    @staticmethod
+    def from_dir(
+        root_dir: StrPath,
+        domain: str,
+        is_dev: bool,
+        output_type: OutputType = OutputType.MeaningRepresentation,
+        simplify_logical_forms: bool = False,
+    ) -> "OvernightDataPieces":
         # TODO make this configurable?
-        canonical_data = json.load(open(root_dir / f"{domain}.canonical.json"))
+        with BlobFile(str(root_dir) + f"/{domain}.canonical.json") as bf:
+            canonical_data = json.load(bf)
 
         if output_type == OutputType.Utterance:
             target_output_to_denotation = {
@@ -67,7 +102,7 @@ class OvernightPieces:
                 if formula is None:
                     continue
                 if simplify_logical_forms:
-                    formula = OvernightPieces.simplify_lf(formula)
+                    formula = OvernightDataPieces.simplify_lf(formula)
                 assert formula not in target_output_to_denotation
                 target_output_to_denotation[formula] = program_info["denotation"]
             datum_key = "formula"
@@ -81,39 +116,62 @@ class OvernightPieces:
                     turn_part_index=None,
                     agent_context=None,
                     natural=d["natural"],
-                    canonical=OvernightPieces.simplify_lf(d[datum_key])
+                    canonical=OvernightDataPieces.simplify_lf(d[datum_key])
                     if simplify_logical_forms
                     else d[datum_key],
                 )
-                for i, line in enumerate(open(path))
+                for i, line in enumerate(
+                    BlobFile(path, streaming=False, cache_dir=CACHE_DIR)
+                )
                 for d in [json.loads(line)]
             ]
             for dataset_name, path in (
                 (
                     "train",
-                    root_dir
-                    / f"{domain}.train_with{'out' if is_dev else ''}_dev.jsonl",
+                    f"{root_dir}/{domain}.train_with{'out' if is_dev else ''}_dev.jsonl",
                 ),
-                ("eval", root_dir / f"{domain}.{'dev' if is_dev else 'test'}.jsonl",),
+                ("eval", f"{root_dir}/{domain}.{'dev' if is_dev else 'test'}.jsonl"),
             )
         ]
-        if prefix_with_space:
-            canonical_trie = Trie(
-                tokenizer.encode(" " + canon) for canon in target_output_to_denotation
-            )
-        else:
-            canonical_trie = Trie(
-                tokenizer.encode(canon) for canon in target_output_to_denotation
-            )
-        partial_parse_builder = lambda _: TriePartialParse(canonical_trie)
 
-        return OvernightPieces(
-            train_data,
-            test_data,
-            partial_parse_builder,
-            TopKDenotationMatch(k, target_output_to_denotation),
-        )
+        return OvernightDataPieces(train_data, test_data, target_output_to_denotation)
 
     @staticmethod
     def simplify_lf(lf: str) -> str:
         return lf.replace("edu.stanford.nlp.sempre.overnight.SimpleWorld.", "")
+
+
+@dataclass
+class OvernightDecoderPieces:
+    data_pieces: OvernightDataPieces
+    partial_parse_builder: Callable[[Datum], TriePartialParse]
+    denotation_metric: TopKDenotationMatch
+    max_length: int
+
+    @staticmethod
+    def create(
+        data_pieces: OvernightDataPieces,
+        tokenizer: ClampTokenizer,
+        k: int,
+        prefix_with_space: bool = False,
+    ) -> "OvernightDecoderPieces":
+        if prefix_with_space:
+            canonical_trie = Trie(
+                tokenizer.encode(" " + canon)
+                for canon in data_pieces.target_output_to_denotation
+            )
+        else:
+            canonical_trie = Trie(
+                tokenizer.encode(canon)
+                for canon in data_pieces.target_output_to_denotation
+            )
+        partial_parse_builder = lambda _: TriePartialParse(canonical_trie)
+
+        denotation_metric = TopKDenotationMatch(
+            k, data_pieces.target_output_to_denotation
+        )
+        max_length = max(len(x) for x in canonical_trie)
+
+        return OvernightDecoderPieces(
+            data_pieces, partial_parse_builder, denotation_metric, max_length
+        )

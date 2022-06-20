@@ -2,9 +2,8 @@
 # Licensed under the MIT License.
 
 import collections
-import inspect
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 import pytest
 import yaml
@@ -17,6 +16,7 @@ from semantic_parsing_with_constrained_lm.scfg.generate import (
     parse_and_render,
 )
 from semantic_parsing_with_constrained_lm.scfg.parser.parse import get_scfg_parser
+from semantic_parsing_with_constrained_lm.scfg.parser.rule import MAYBE_PREFIX as PFX
 from semantic_parsing_with_constrained_lm.scfg.parser.types import Expansion
 from semantic_parsing_with_constrained_lm.scfg.read_grammar import PreprocessedGrammar, parse_string
 from semantic_parsing_with_constrained_lm.scfg.scfg import (
@@ -24,6 +24,10 @@ from semantic_parsing_with_constrained_lm.scfg.scfg import (
     convert_to_lark_rule,
     get_nonterminal_ordering,
 )
+
+MAYBE_PLEASE = f"{PFX}_t_please"
+MAYBE_AND_PERSON = f"{PFX}_nt_and_person"
+MAYBE_AT_PLACE = f"{PFX}_nt_at_place"
 
 
 def expansion_to_values(expansion: Expansion) -> Tuple[str, ...]:
@@ -40,13 +44,6 @@ def expansion_to_string(expansion: Expansion) -> str:
 def example_scfg():
     return SCFG.from_folder(
         os.path.join(os.path.dirname(os.path.realpath(__file__)), "test_grammar")
-    )
-
-
-@pytest.fixture(scope="module", name="scfg2")
-def example_scfg2():
-    return SCFG.from_folder(
-        os.path.join(os.path.dirname(os.path.realpath(__file__)), "test_grammar_2")
     )
 
 
@@ -71,29 +68,26 @@ def test_convert_to_lark_rule(parser):
 
 
 def test_scfg(scfg):
-    def _helper1(d: Dict[str, List[Expansion]]) -> Dict[str, List[Tuple[str, ...]]]:
+    def _helper1(d: Dict[str, List[Expansion]]) -> Dict[str, Set[Tuple[str, ...]]]:
         """
         Given a dictionary where the values are lists of Expansion, return a new
         dictionary where the Expansion are converted into Lists of strings.
         """
-        new_d = {}
-        for key in d:
-            new_d[key] = [expansion_to_values(expansion) for expansion in d[key]]
-        return new_d
+        return {
+            k: {expansion_to_values(e) for e in expansions}
+            for k, expansions in d.items()
+        }
 
     def _helper2(d: Dict[str, Expansion]) -> Dict[str, Tuple[str, ...]]:
         """
         Given a dictionary where the values are lists of Expansion, return a new
         dictionary where the Expansion are converted into Lists of strings.
         """
-        new_d = {}
-        for key in d:
-            new_d[key] = expansion_to_values(d[key])
-        return new_d
+        return {k: expansion_to_values(e) for k, e in d.items()}
 
     assert _helper1(scfg.plan_grammar_keyed_by_nonterminal) == {
-        "start": [("create",)],
-        "create": [
+        "start": {("create",)},
+        "create": {
             ('"describe"', '" ask"', '" (create"', '" Event"', '")"', "with_person"),
             (
                 '"describe"',
@@ -102,58 +96,44 @@ def test_scfg(scfg):
                 '" Event"',
                 '")"',
                 "with_person",
-                "and_person",
-                "at_place",
+                MAYBE_AND_PERSON,
+                MAYBE_AT_PLACE,
             ),
-            (
-                '"describe"',
-                '" ask"',
-                '" (create"',
-                '" Event"',
-                '")"',
-                "with_person",
-                "and_person",
-            ),
-            (
-                '"describe"',
-                '" ask"',
-                '" (create"',
-                '" Event"',
-                '")"',
-                "with_person",
-                "at_place",
-            ),
-        ],
-        "with_person": [('" with attendees includes do the Recipient"', "person")],
-        "and_person": [('" includes do the Recipient"', "person")],
-        "at_place": [('" do the Place "', '"/"', '" at [x]"',)],
-        "person": [('" \\"James\\""',), ('" \\"Julie\\""',)],
+        },
+        MAYBE_AND_PERSON: {("and_person",), ("",)},
+        MAYBE_AT_PLACE: {("at_place",), ("",)},
+        "with_person": {('" with attendees includes do the Recipient"', "person")},
+        "and_person": {('" includes do the Recipient"', "person")},
+        "at_place": {('" do the Place "', '"/"', '" at [x]"')},
+        "person": {('" \\"James\\""',), ('" \\"Julie\\""',)},
     }
 
     assert _helper1(scfg.utterance_grammar_keyed_by_nonterminal) == {
-        "start": [("create",)],
-        "create": [
+        "start": {("create",)},
+        "create": {
             ("set_up", "meeting", "with_person"),
-            ('"please"', '" find time"', "with_person"),
-            ('" find time"', "with_person"),
-            ('"please"', '" find time"', "with_person", "and_person", "at_place"),
-            ('" find time"', "with_person", "and_person", "at_place"),
-            ('"please"', '" find time"', "with_person", "and_person"),
-            ('" find time"', "with_person", "and_person"),
-            ('"please"', '" find time"', "with_person", "at_place"),
-            ('" find time"', "with_person", "at_place"),
-        ],
-        "with_person": [('" with"', "person")],
-        "and_person": [('" and"', "person")],
-        "at_place": [('" there"',)],
-        "person": [('" James"',), ('" Julie"',)],
-        "meeting": [('" meeting"',), ('" time"',)],
-        "set_up": [("",), ('"set up a"',)],
+            (
+                MAYBE_PLEASE,
+                '" find time"',
+                "with_person",
+                MAYBE_AND_PERSON,
+                MAYBE_AT_PLACE,
+            ),
+        },
+        MAYBE_PLEASE: {('"please"',), ("",)},
+        MAYBE_AND_PERSON: {("and_person",), ("",)},
+        MAYBE_AT_PLACE: {("at_place",), ("",)},
+        "with_person": {('" with"', "person")},
+        "and_person": {('" and"', "person")},
+        "at_place": {('" there"',)},
+        "person": {('" James"',), ('" Julie"',)},
+        "meeting": {('" meeting"',), ('" time"',)},
+        "set_up": {("",), ('"set up a"',)},
     }
 
     assert _helper2(scfg.plan_grammar_keyed_by_alias) == {
         "start_start_0": ("create",),
-        "create_create_0_create_1_create_2": (
+        "create_create_0": (
             '"describe"',
             '" ask"',
             '" (create"',
@@ -161,34 +141,20 @@ def test_scfg(scfg):
             '")"',
             "with_person",
         ),
-        "create_create_3_create_4": (
+        "create_create_1": (
             '"describe"',
             '" ask"',
             '" (create"',
             '" Event"',
             '")"',
             "with_person",
-            "and_person",
-            "at_place",
+            MAYBE_AND_PERSON,
+            MAYBE_AT_PLACE,
         ),
-        "create_create_5_create_6": (
-            '"describe"',
-            '" ask"',
-            '" (create"',
-            '" Event"',
-            '")"',
-            "with_person",
-            "and_person",
-        ),
-        "create_create_7_create_8": (
-            '"describe"',
-            '" ask"',
-            '" (create"',
-            '" Event"',
-            '")"',
-            "with_person",
-            "at_place",
-        ),
+        f"{MAYBE_AND_PERSON}_{MAYBE_AND_PERSON}_0": ("",),
+        f"{MAYBE_AND_PERSON}_{MAYBE_AND_PERSON}_1": ("and_person",),
+        f"{MAYBE_AT_PLACE}_{MAYBE_AT_PLACE}_0": ("",),
+        f"{MAYBE_AT_PLACE}_{MAYBE_AT_PLACE}_1": ("at_place",),
         "with_person_with_person_0": (
             '" with attendees includes do the Recipient"',
             "person",
@@ -202,20 +168,19 @@ def test_scfg(scfg):
     assert _helper2(scfg.utterance_grammar_keyed_by_alias) == {
         "start_0": ("create",),
         "create_0": ("set_up", "meeting", "with_person"),
-        "create_1": ('"please"', '" find time"', "with_person"),
-        "create_2": ('" find time"', "with_person"),
-        "create_3": (
-            '"please"',
+        "create_1": (
+            MAYBE_PLEASE,
             '" find time"',
             "with_person",
-            "and_person",
-            "at_place",
+            MAYBE_AND_PERSON,
+            MAYBE_AT_PLACE,
         ),
-        "create_4": ('" find time"', "with_person", "and_person", "at_place"),
-        "create_5": ('"please"', '" find time"', "with_person", "and_person"),
-        "create_6": ('" find time"', "with_person", "and_person"),
-        "create_7": ('"please"', '" find time"', "with_person", "at_place"),
-        "create_8": ('" find time"', "with_person", "at_place"),
+        f"{MAYBE_AND_PERSON}_0": ("",),
+        f"{MAYBE_AND_PERSON}_1": ("and_person",),
+        f"{MAYBE_AT_PLACE}_0": ("",),
+        f"{MAYBE_AT_PLACE}_1": ("at_place",),
+        f"{MAYBE_PLEASE}_0": ("",),
+        f"{MAYBE_PLEASE}_1": ('"please"',),
         "with_person_0": ('" with"', "person"),
         "and_person_0": ('" and"', "person"),
         "at_place_0": ('" there"',),
@@ -229,14 +194,16 @@ def test_scfg(scfg):
 
     assert scfg.plan_nonterminal_indices_by_alias == {
         "start_start_0": {("create", 0): 0},
-        "create_create_0_create_1_create_2": {("with_person", 0): 0},
-        "create_create_3_create_4": {
+        "create_create_0": {("with_person", 0): 0},
+        "create_create_1": {
             ("with_person", 0): 0,
-            ("and_person", 0): 1,
-            ("at_place", 0): 2,
+            (MAYBE_AND_PERSON, 0): 1,
+            (MAYBE_AT_PLACE, 0): 2,
         },
-        "create_create_5_create_6": {("with_person", 0): 0, ("and_person", 0): 1},
-        "create_create_7_create_8": {("with_person", 0): 0, ("at_place", 0): 1},
+        f"{MAYBE_AND_PERSON}_{MAYBE_AND_PERSON}_0": {},
+        f"{MAYBE_AND_PERSON}_{MAYBE_AND_PERSON}_1": {("and_person", 0): 0},
+        f"{MAYBE_AT_PLACE}_{MAYBE_AT_PLACE}_0": {},
+        f"{MAYBE_AT_PLACE}_{MAYBE_AT_PLACE}_1": {("at_place", 0): 0},
         "with_person_with_person_0": {("person", 0): 0},
         "and_person_and_person_0": {("person", 0): 0},
         "at_place_at_place_0": {},
@@ -247,14 +214,12 @@ def test_scfg(scfg):
     assert scfg.utterance_nonterminal_indices_by_alias == {
         "start_0": {("create", 0): 0},
         "create_0": {("set_up", 0): 0, ("meeting", 0): 1, ("with_person", 0): 2},
-        "create_1": {("with_person", 0): 0},
-        "create_2": {("with_person", 0): 0},
-        "create_3": {("with_person", 0): 0, ("and_person", 0): 1, ("at_place", 0): 2},
-        "create_4": {("with_person", 0): 0, ("and_person", 0): 1, ("at_place", 0): 2},
-        "create_5": {("with_person", 0): 0, ("and_person", 0): 1},
-        "create_6": {("with_person", 0): 0, ("and_person", 0): 1},
-        "create_7": {("with_person", 0): 0, ("at_place", 0): 1},
-        "create_8": {("with_person", 0): 0, ("at_place", 0): 1},
+        "create_1": {
+            (MAYBE_PLEASE, 0): 0,
+            ("with_person", 0): 1,
+            (MAYBE_AND_PERSON, 0): 2,
+            (MAYBE_AT_PLACE, 0): 3,
+        },
         "with_person_0": {("person", 0): 0},
         "and_person_0": {("person", 0): 0},
         "at_place_0": {},
@@ -264,37 +229,27 @@ def test_scfg(scfg):
         "meeting_1": {},
         "set_up_0": {},
         "set_up_1": {},
+        f"{MAYBE_AND_PERSON}_0": {},
+        f"{MAYBE_AND_PERSON}_1": {("and_person", 0): 0},
+        f"{MAYBE_AT_PLACE}_0": {},
+        f"{MAYBE_AT_PLACE}_1": {("at_place", 0): 0},
+        f"{MAYBE_PLEASE}_0": {},
+        f"{MAYBE_PLEASE}_1": {},
     }
 
-    assert scfg.utterance_alias_to_plan_alias == {
-        "start_0": ["start_start_0"],
-        "create_0": ["create_create_0_create_1_create_2"],
-        "create_1": ["create_create_0_create_1_create_2"],
-        "create_2": ["create_create_0_create_1_create_2"],
-        "create_3": ["create_create_3_create_4"],
-        "create_4": ["create_create_3_create_4"],
-        "create_5": ["create_create_5_create_6"],
-        "create_6": ["create_create_5_create_6"],
-        "create_7": ["create_create_7_create_8"],
-        "create_8": ["create_create_7_create_8"],
-        "with_person_0": ["with_person_with_person_0"],
-        "and_person_0": ["and_person_and_person_0"],
-        "at_place_0": ["at_place_at_place_0"],
-        "person_0": ["person_person_0"],
-        "person_1": ["person_person_1"],
+    expected_utt_to_plan = {
+        f"{nt}_{i}": [f"{nt}_{nt}_{i}"]
+        for n, nts in [
+            (1, ["start", "with_person", "and_person", "at_place"]),
+            (2, ["create", "person", MAYBE_AND_PERSON, MAYBE_AT_PLACE]),
+        ]
+        for i in range(n)
+        for nt in nts
     }
+    assert scfg.utterance_alias_to_plan_alias == expected_utt_to_plan
 
     assert scfg.plan_alias_to_utterance_alias == {
-        "start_start_0": ["start_0"],
-        "create_create_0_create_1_create_2": ["create_0", "create_1", "create_2"],
-        "create_create_3_create_4": ["create_3", "create_4"],
-        "create_create_5_create_6": ["create_5", "create_6"],
-        "create_create_7_create_8": ["create_7", "create_8"],
-        "with_person_with_person_0": ["with_person_0"],
-        "and_person_and_person_0": ["and_person_0"],
-        "at_place_at_place_0": ["at_place_0"],
-        "person_person_0": ["person_0"],
-        "person_person_1": ["person_1"],
+        v: [k] for k, (v,) in expected_utt_to_plan.items()
     }
 
     assert scfg.utterance_lark.parser.parse(
@@ -303,8 +258,13 @@ def test_scfg(scfg):
         "start_0",
         [
             Tree(
-                "create_7",
-                [Tree("with_person_0", [Tree("person_1", [])]), Tree("at_place_0", [])],
+                "create_1",
+                [
+                    Tree(f"{MAYBE_PLEASE}_1", []),
+                    Tree("with_person_0", [Tree("person_1", [])]),
+                    Tree(f"{MAYBE_AND_PERSON}_0", []),
+                    Tree(f"{MAYBE_AT_PLACE}_1", [Tree("at_place_0", [])]),
+                ],
             )
         ],
     )
@@ -315,63 +275,24 @@ def test_scfg(scfg):
         "start_start_0",
         [
             Tree(
-                "create_create_7_create_8",
+                "create_create_1",
                 [
                     Tree("with_person_with_person_0", [Tree("person_person_0", [])]),
-                    Tree("at_place_at_place_0", []),
+                    Tree(f"{MAYBE_AND_PERSON}_{MAYBE_AND_PERSON}_0", []),
+                    Tree(
+                        f"{MAYBE_AT_PLACE}_{MAYBE_AT_PLACE}_1",
+                        [Tree("at_place_at_place_0", [])],
+                    ),
                 ],
             )
         ],
-    )
-
-    assert (
-        scfg.utterance_lark.grammar
-        == inspect.cleandoc(
-            """and_person: " and"i person -> and_person_0
-        at_place: " there"i -> at_place_0
-        create: set_up meeting with_person -> create_0
-        |"please"i " find time"i with_person -> create_1
-        |" find time"i with_person -> create_2
-        |"please"i " find time"i with_person and_person at_place -> create_3
-        |" find time"i with_person and_person at_place -> create_4
-        |"please"i " find time"i with_person and_person -> create_5
-        |" find time"i with_person and_person -> create_6
-        |"please"i " find time"i with_person at_place -> create_7
-        |" find time"i with_person at_place -> create_8
-        meeting: " meeting"i -> meeting_0
-        |" time"i -> meeting_1
-        person: " James"i -> person_0
-        |" Julie"i -> person_1
-        set_up:  -> set_up_0
-        |"set up a"i -> set_up_1
-        start: create -> start_0
-        with_person: " with"i person -> with_person_0"""
-        )
-        + "\n"
-    )
-
-    assert (
-        scfg.plan_lark.grammar
-        == inspect.cleandoc(
-            """and_person: " includes do the Recipient" person -> and_person_and_person_0
-        at_place: " do the Place " "/" " at [x]" -> at_place_at_place_0
-        create: "describe" " ask" " (create" " Event" ")" with_person -> create_create_0_create_1_create_2
-        |"describe" " ask" " (create" " Event" ")" with_person and_person at_place -> create_create_3_create_4
-        |"describe" " ask" " (create" " Event" ")" with_person and_person -> create_create_5_create_6
-        |"describe" " ask" " (create" " Event" ")" with_person at_place -> create_create_7_create_8
-        person: " \\"James\\"" -> person_person_0
-        |" \\"Julie\\"" -> person_person_1
-        start: create -> start_start_0
-        with_person: " with attendees includes do the Recipient" person -> with_person_with_person_0"""
-        )
-        + "\n"
     )
 
 
 def load_plan_utterance_pairs(test_filename: str):
     return yaml.load(
         open(
-            os.path.join(os.path.dirname(os.path.realpath(__file__)), test_filename,),
+            os.path.join(os.path.dirname(os.path.realpath(__file__)), test_filename),
             "r",
         ),
         Loader=yaml.BaseLoader,
@@ -491,12 +412,12 @@ def test_plan_to_utterance_with_a_regex_in_an_utterance_only_rule():
 
     # uses two utterance-only rules and one sync rule
     start -> createEventPrefix cmspace createEventSuffix eventPredicate , "describe create event" eventPredicate
-    eventPredicate -> !" today" , " today"
+    eventPredicate -> " today" , " today"
 
     # utterance-only rules
-    createEventPrefix 1> !"create"
-    createEventSuffix 1> !"an event"
-    cmspace 1> !/ /
+    createEventPrefix 1> "create"
+    createEventSuffix 1> "an event"
+    cmspace 1> / /
     """
 
     grammar = SCFG(PreprocessedGrammar.from_line_iter(grammar_str.splitlines()))

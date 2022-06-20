@@ -3,11 +3,11 @@
 
 import collections
 import heapq
-import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from functools import reduce
+from functools import partial, reduce
 from typing import (
+    Any,
     Callable,
     Dict,
     Generic,
@@ -16,14 +16,15 @@ from typing import (
     List,
     Optional,
     Set,
+    TextIO,
     Tuple,
     cast,
 )
 
 from lark import Token, Tree
 
-from semantic_parsing_with_constrained_lm.earley.agenda import BP, Attach, Column, Item, Meta, Predict, Scan
-from semantic_parsing_with_constrained_lm.earley.grammar import DottedRule, Grammar, Nonterm, Terminal
+from semantic_parsing_with_constrained_lm.earley.agenda import Attach, Bp, Column, Item, Meta, MetaOps, Predict, Scan
+from semantic_parsing_with_constrained_lm.earley.grammar import DottedRule, Grammar, Nonterm, RuleResult, Terminal
 from semantic_parsing_with_constrained_lm.earley.input import Position
 from semantic_parsing_with_constrained_lm.util.keydefaultdict import KeyDefaultDict
 
@@ -68,7 +69,9 @@ class PackedForest(Generic[Terminal]):
             # non-regex Leaves are ignored in lark.Trees
             return None
 
-        return go(self)
+        result = go(self)
+        assert result is not None
+        return result
 
     @staticmethod
     def plus(
@@ -118,8 +121,8 @@ class PackedForest(Generic[Terminal]):
 
 
 @dataclass(frozen=True)
-class Node(PackedForest, Generic[Terminal]):
-    rule: DottedRule[Terminal]
+class Node(PackedForest[Terminal]):
+    rule: DottedRule[Terminal, Any]
     children: List[PackedForest[Terminal]]
 
     @property
@@ -128,7 +131,7 @@ class Node(PackedForest, Generic[Terminal]):
 
 
 @dataclass(frozen=True)
-class Ambig(PackedForest, Generic[Terminal]):
+class Ambig(PackedForest[Terminal]):
     children: List[PackedForest[Terminal]]
 
     @property
@@ -143,7 +146,7 @@ class Ambig(PackedForest, Generic[Terminal]):
 
 
 @dataclass(frozen=True)
-class Leaf(PackedForest, Generic[Terminal]):
+class Leaf(PackedForest[Terminal]):
     terminal: Terminal
     # we save `pos` in case `terminal` is a regex,
     # which doesn't remember which char it matched
@@ -163,17 +166,22 @@ class Fail(PackedForest, Generic[Terminal]):
     pass
 
 
-class EarleyChart(Generic[Terminal]):
+class EarleyChart(Generic[Terminal, RuleResult]):
     """A chart for Earley's algorithm.  Allows fine-grained external control,
     or it can be subclassed to add a control mechanism like exhaustive search
     or beam search.  The API is called with positions in the input."""
 
     # maps an input position to its column, making a new column if necessary
-    _cols: KeyDefaultDict[Position[Terminal], Column[Terminal]]
+    cols: KeyDefaultDict[Position[Terminal], Column[Terminal, RuleResult]]
 
-    def __init__(self, grammar: Grammar[Terminal]) -> None:
+    def __init__(
+        self, grammar: Grammar[Terminal, RuleResult], use_backpointers: bool
+    ) -> None:
         self.grammar = grammar
-        self._cols = KeyDefaultDict(Column[Terminal])
+        self.use_backpointers = use_backpointers
+        self.cols = KeyDefaultDict(
+            partial(Column[Terminal, RuleResult], use_backpointers=use_backpointers)
+        )
 
     def seek(self, nonterm: Nonterm, start_pos: Position[Terminal]) -> None:
         """
@@ -181,7 +189,7 @@ class EarleyChart(Generic[Terminal]):
         starting at the given position.  Normally, the nonterminal is the start
         symbol of the grammar, and the position is the start of the input.
         """
-        self._predict(None, nonterm, self._cols[start_pos])
+        self._predict(None, nonterm, self.cols[start_pos])
 
     def was_found(
         self,
@@ -202,10 +210,13 @@ class EarleyChart(Generic[Terminal]):
         nonterm: Nonterm,
         start_pos: Position[Terminal],
         end_pos: Position[Terminal],
-    ) -> Iterator[Tuple[Item[Terminal], Meta[Terminal]]]:
-        start_col = self._cols[start_pos]
-        for item, weight in self._cols[end_pos].all_items():
-            if item.dotted_rule.lhs == nonterm and item.dotted_rule.is_final():
+    ) -> Iterator[Tuple[Item[Terminal, RuleResult], Meta[Terminal]]]:
+        start_col = self.cols[start_pos]
+        for item, weight in self.cols[end_pos].all_items():
+            if (
+                item.dotted_rule.lhs == nonterm
+                and item.dotted_rule.is_final() is not None
+            ):
                 # we found a complete nonterm
                 if item.start_col == start_col:
                     yield item, weight
@@ -213,26 +224,29 @@ class EarleyChart(Generic[Terminal]):
     def _advance_with_terminal_callback(
         self,
         pos: Position[Terminal],
-        callback: Callable[[Item[Terminal], Terminal, Column[Terminal]], None],
+        callback: Callable[
+            [Item[Terminal, RuleResult], Terminal, Column[Terminal, RuleResult]], None
+        ],
     ) -> None:
-        col = self._cols[pos]
-        logging.debug("")
-        logging.debug("Processing items in %s", col)
+        col = self.cols[pos]
+        # logging.debug("")
+        # logging.debug("Processing items in %s", col)
         while col:  # while agenda isn't empty
             item = col.pop()  # dequeue the next unprocessed item
-            if item.dotted_rule.is_final():
+            rule_result = item.dotted_rule.is_final()
+            if rule_result is not None:
                 # Attach this complete constituent to its previously popped customers to the left
-                logging.debug("%s => ATTACH", item)
-                self._attach(item, col)
+                # logging.debug("%s => ATTACH", item)
+                self._attach(item, col, rule_result)
             # not incompatible with being final
             for next_symbol in item.dotted_rule.next_symbols():
                 if isinstance(next_symbol, Nonterm):
                     # Looking for a complete constituent to the right
-                    logging.debug("%s => PREDICT", item)
+                    # logging.debug("%s => PREDICT", item)
                     self._predict(item, next_symbol, col)
                 else:
                     # Looking for a terminal
-                    logging.debug("%s => SCAN", item)
+                    # logging.debug("%s => SCAN", item)
                     callback(item, next_symbol, col)
 
     def advance(self, pos: Position[Terminal]) -> Iterable[Position[Terminal]]:
@@ -246,7 +260,9 @@ class EarleyChart(Generic[Terminal]):
         touched: Set[Position[Terminal]] = set()
 
         def callback(
-            item: Item[Terminal], next_symbol: Terminal, col: Column[Terminal]
+            item: Item[Terminal, RuleResult],
+            next_symbol: Terminal,
+            col: Column[Terminal, RuleResult],
         ):
             for future_pos in self._scan(item, next_symbol, col):
                 if future_pos != pos:
@@ -256,8 +272,8 @@ class EarleyChart(Generic[Terminal]):
         return touched
 
     def advance_only_nonterminals(
-        self, pos: Position[Terminal]
-    ) -> Dict[Terminal, List[Item[Terminal]]]:
+        self, pos: Position[Terminal], unpop_terminals: bool = True
+    ) -> Dict[Terminal, List[Item[Terminal, RuleResult]]]:
         """
         Processes the chart so that all items in the column for the given `pos`
         consists of rules which look like
@@ -270,10 +286,14 @@ class EarleyChart(Generic[Terminal]):
 
         Returns the set of all terminals that can come next from this position.
         """
-        terminals: Dict[Terminal, List[Item[Terminal]]] = collections.defaultdict(list)
+        terminals: Dict[
+            Terminal, List[Item[Terminal, RuleResult]]
+        ] = collections.defaultdict(list)
 
         def callback(
-            item: Item[Terminal], next_symbol: Terminal, _col: Column[Terminal]
+            item: Item[Terminal, RuleResult],
+            next_symbol: Terminal,
+            _col: Column[Terminal, RuleResult],
         ):
             # Assumes that `self._scan(item, next_symbol, col)` would
             # have not touched this column, only future ones
@@ -282,17 +302,20 @@ class EarleyChart(Generic[Terminal]):
         self._advance_with_terminal_callback(pos, callback)
 
         # Put back all the items which have a terminal as the next item
-        self._cols[pos].unpop_using_pred(
-            lambda item: bool(item.dotted_rule.rhs)
-            and not isinstance(item.dotted_rule.rhs[0], Nonterm)
-        )
+        # TODO: Document why this was needed for EarleyPartialParse
+        if unpop_terminals:
+            self.cols[pos].unpop_using_pred(
+                lambda item: any(
+                    not isinstance(s, Nonterm) for s in item.dotted_rule.next_symbols()
+                )
+            )
         return terminals
 
     def advance_with_terminal(
         self,
         pos: Position[Terminal],
         terminal: Terminal,
-        items: Iterable[Item[Terminal]],
+        items: Iterable[Item[Terminal, RuleResult]],
     ) -> Iterable[Position[Terminal]]:
         """Scan from the given `pos` with the given `terminal`.
 
@@ -303,14 +326,14 @@ class EarleyChart(Generic[Terminal]):
         return {
             next_pos
             for item in items
-            for next_pos in self._scan(item, terminal, self._cols[pos])
+            for next_pos in self._scan(item, terminal, self.cols[pos])
         }
 
     def _predict(
         self,
-        customer: Optional[Item[Terminal]],
+        customer: Optional[Item[Terminal, RuleResult]],
         nonterm: Nonterm,
-        col: Column[Terminal],
+        col: Column[Terminal, RuleResult],
     ) -> None:
         """
         Starts looking for this nonterm starting at col, to continue the given customer.
@@ -319,37 +342,45 @@ class EarleyChart(Generic[Terminal]):
         # first, see if some values of the predicted thing have *already* been found due to order violation.
         # if so, they serve this customer immediately.
         if customer is not None:
-            logging.debug(
-                "\tLooking right for complete %s servers starting at %s",
-                nonterm,
-                col.pos,
-            )
-            for server, future_col in col.servers[nonterm]:
-                logging.debug("\tFound server %s in %s", server, future_col)
-                for new_item in customer.scan(nonterm):
-                    future_col.push(
-                        new_item,
-                        Meta.pure(Attach(server=server, customer=customer, col=col)),
+            # logging.debug(
+            #     "\tLooking right for complete %s servers starting at %s",
+            #     nonterm,
+            #     col.pos,
+            # )
+            for server, future_col, rule_result in col.servers[nonterm]:
+                # logging.debug("\tFound server %s in %s", server, future_col)
+                for new_item in customer.scan_nonterm(nonterm, rule_result):
+                    meta = (
+                        MetaOps.pure(Attach(server=server, customer=customer, col=col))
+                        if self.use_backpointers
+                        else None
                     )
-                    logging.debug("\tAttached to get: %s in %s", new_item, future_col)
+                    future_col.push(new_item, meta)
+                    # logging.debug("\tAttached to get: %s in %s", new_item, future_col)
 
         # now do a traditional predict operation
         if nonterm not in col.predicted:
             # don't add all the same rules to this col if we already did
             col.predicted.add(nonterm)  # remember not to do it again
-            for rule in self.grammar.expansions[nonterm]:
-                new_item = Item[Terminal](rule, col)
-                col.push(
-                    item=new_item, meta=Meta.pure(Predict(new_item=new_item)),
+            for rule in self.grammar.get_expansions(nonterm):
+                new_item = Item(rule, col)
+                meta = (
+                    MetaOps.pure(Predict(new_item=new_item))
+                    if self.use_backpointers
+                    else None
                 )
-                logging.debug("\tPredicted: %s in %s", new_item, col)
+                col.push(item=new_item, meta=meta)
+                # logging.debug("\tPredicted: %s in %s", new_item, col)
 
         # customer is now waiting for anything that comes back from the prediction
         if customer is not None:
             col.customers[nonterm].append(customer)
 
     def _scan(
-        self, item: Item[Terminal], terminal: Terminal, col: Column[Terminal]
+        self,
+        item: Item[Terminal, RuleResult],
+        terminal: Terminal,
+        col: Column[Terminal, RuleResult],
     ) -> Iterable[Position[Terminal]]:
         """
         Try to consume the terminal from the input, creating new items.
@@ -357,17 +388,23 @@ class EarleyChart(Generic[Terminal]):
         There may be duplicates.
         """
         for future_pos in col.pos.scan(terminal):  # try to advance in the input
-            future_col = self._cols[future_pos]
-            for new_item in item.scan(terminal):  # try to advance in the rule
-                future_col.push(
-                    item=new_item,
-                    meta=Meta.pure(Scan(item=item, terminal=terminal, col=col)),
+            future_col = self.cols[future_pos]
+            for new_item in item.scan_terminal(terminal):  # try to advance in the rule
+                meta = (
+                    MetaOps.pure(Scan(item=item, terminal=terminal, col=col))
+                    if self.use_backpointers
+                    else None
                 )
-                logging.debug("\tScanned to get: %s in %s", new_item, future_col)
+                future_col.push(item=new_item, meta=meta)
+                # logging.debug("\tScanned to get: %s in %s", new_item, future_col)
             yield future_pos
 
-    @staticmethod
-    def _attach(server: Item[Terminal], col: Column[Terminal]) -> None:
+    def _attach(
+        self,
+        server: Item[Terminal, RuleResult],
+        col: Column[Terminal, RuleResult],
+        rule_result: RuleResult,
+    ) -> None:
         """
         The complete item can now serve its customers in previous columns, advancing
         the customers' dots to create new items in column col.  (This operation is sometimes
@@ -376,20 +413,30 @@ class EarleyChart(Generic[Terminal]):
         lhs = server.dotted_rule.lhs  # nonterminal of this item
         # start position of this item = end position of item to its left
         past_col = server.start_col
-        logging.debug("\tLooking left for %s customers in %s", lhs, past_col)
+        # logging.debug("\tLooking left for %s customers in %s", lhs, past_col)
         for customer in past_col.customers[lhs]:
-            logging.debug("\tFound customer %s in %s", customer, past_col)
-            for new_item in customer.scan(lhs):
-                col.push(
-                    new_item,
-                    meta=Meta.pure(Attach(server=server, customer=customer, col=col)),
+            # logging.debug("\tFound customer %s in %s", customer, past_col)
+            for new_item in customer.scan_nonterm(lhs, rule_result):
+                meta = (
+                    MetaOps.pure(Attach(server=server, customer=customer, col=col))
+                    if self.use_backpointers
+                    else None
                 )
-                logging.debug("\tAttached to get: %s in %s", new_item, col)
+                col.push(new_item, meta=meta)
+                # logging.debug("\tAttached to get: %s in %s", new_item, col)
         # past_col must remember that this item came looking
-        past_col.servers[lhs].append((server, col))
+        past_col.servers[lhs].append((server, col, rule_result))
+
+    def debug_output(self, f: TextIO) -> None:
+        """Writes a representation of the chart to `f`."""
+        for pos, col in self.cols.items():
+            print(f"==== {len(pos)} ====", file=f)
+            for item, _ in col.all_items():
+                print(f"({len(item.start_col.pos)}) {item.dotted_rule}", file=f)
+            print(file=f)
 
 
-class EarleyLRChart(EarleyChart[Terminal]):
+class EarleyLRChart(EarleyChart[Terminal, RuleResult]):
     """
     Exhaustive Earley's algorithm (there's no pruning of positions or items at a position).
     Advances all positions from left to right (that is, in len() order).  This is one possible
@@ -403,10 +450,13 @@ class EarleyLRChart(EarleyChart[Terminal]):
     _final_pos_set: Optional[Set[Position[Terminal]]]
 
     def __init__(
-        self, grammar: Grammar[Terminal], start_pos: Position[Terminal]
+        self,
+        grammar: Grammar[Terminal, RuleResult],
+        start_pos: Position[Terminal],
+        use_backpointers: bool,
     ) -> None:
         """A chart for a given input."""
-        super().__init__(grammar)
+        super().__init__(grammar=grammar, use_backpointers=use_backpointers)
         self.start_pos = start_pos
         self._final_pos_set = None
 
@@ -433,7 +483,8 @@ class EarleyLRChart(EarleyChart[Terminal]):
 
         if self._final_pos_set is not None:
             # we've been here before, so just consult cached results
-            return self._final_pos_set
+            yield from self._final_pos_set
+            return
 
         # initialize parser
         self._final_pos_set = set()
@@ -458,21 +509,31 @@ class EarleyLRChart(EarleyChart[Terminal]):
                 yield pos
                 self._final_pos_set.add(pos)
 
+    def is_grammatical(self) -> bool:
+        """
+        Returns True if the input is grammatical, False otherwise.
+        """
+        for _ in self.accepting_positions():
+            return True
+        return False
+
     def parse(self) -> PackedForest[Terminal]:
         """Returns a packed forest representation of all possible parses."""
+        assert self.use_backpointers
         # force to a list so we're sure we're done parsing
         meta = self.final_meta()
         return backtrace(meta)
 
     def final_meta(self) -> Meta[Terminal]:
         """The Meta (currently backpointers) representing all possible parses."""
+        assert self.use_backpointers
         accepting_positions = list(self.accepting_positions())
         all_metas = [
             m
             for pos in accepting_positions
             for _, m in self.completed_items(self.grammar.root, self.start_pos, pos)
         ]
-        return reduce(Meta.plus, all_metas, Meta.zero())
+        return reduce(MetaOps[Terminal].plus, all_metas, MetaOps[Terminal].zero())
 
 
 def backtrace(meta: Meta[Terminal]) -> PackedForest[Terminal]:
@@ -484,7 +545,7 @@ def backtrace(meta: Meta[Terminal]) -> PackedForest[Terminal]:
     `PackedForest.sum` to handle ambiguity (more than 1) or failure (0).
     """
 
-    def go_bp(bp: BP) -> PackedForest[Terminal]:
+    def go_bp(bp: Bp) -> PackedForest[Terminal]:
         """Backtrace a single backpointer"""
         # Beginning of a rule (includes empty productions)
         if isinstance(bp, Predict):
@@ -525,4 +586,4 @@ def backtrace(meta: Meta[Terminal]) -> PackedForest[Terminal]:
             rule=init_node.rule, children=init_node.children + [last_child_node]
         )
 
-    return PackedForest.sum(go_bp(c) for c in meta.bps)
+    return PackedForest.sum(go_bp(c) for c in meta)

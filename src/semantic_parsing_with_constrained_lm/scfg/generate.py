@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import functools
+import random
 from collections import defaultdict
 from copy import copy
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from semantic_parsing_with_constrained_lm.util.util import (
     head_or_random,
     maybe_randomize,
 )
-from semantic_parsing_with_constrained_lm.scfg.char_grammar import CharGrammar
+from semantic_parsing_with_constrained_lm.scfg.char_grammar import CharGrammar, NotParsable
 from semantic_parsing_with_constrained_lm.scfg.generated_node import (
     GeneratedNode,
     GeneratedNonterminalNode,
@@ -25,13 +26,12 @@ from semantic_parsing_with_constrained_lm.scfg.parser.token import (
     EmptyToken,
     NonterminalToken,
     RegexToken,
+    SCFGToken,
     TerminalToken,
 )
 from semantic_parsing_with_constrained_lm.scfg.parser.types import Alias, Expansion, Nonterminal
 from semantic_parsing_with_constrained_lm.scfg.scfg import SCFG
 from semantic_parsing_with_constrained_lm.scfg.string_utils import detokenize
-
-ASCII_CHARS = [chr(i) for i in range(32, 127)]
 
 
 @dataclass(frozen=True)
@@ -136,7 +136,7 @@ def _generate_from_parse_tree_impl(
                             # freezes `child` so it doesn't change out from under us
                             def it(c: Tree):
                                 return lambda: _generate_from_parse_tree_impl(
-                                    cast(Tree, c), indexes, randomize,
+                                    cast(Tree, c), indexes, randomize
                                 )
 
                             token_generations = IteratorGenerator(it(cast(Tree, child)))
@@ -146,8 +146,10 @@ def _generate_from_parse_tree_impl(
                         # parse tree and just generate randomly from the target grammar.
                         ###
                         if isinstance(token, RegexToken):
-                            token_generations = _generate_from_ascii_char_regex(
-                                token, randomize
+                            token_generations = (
+                                _sample_wo_replacement_from_ascii_char_regex(
+                                    token, randomize
+                                )
                             )
                         else:
                             # freezes `token.value` so it doesn't change out from under us
@@ -170,15 +172,52 @@ def _generate_from_parse_tree_impl(
                 yield GeneratedNonterminalNode(instantiated_expansion, target_alias)
 
 
-def _generate_from_ascii_char_regex(
-    token: RegexToken, randomize: bool,
+def _sample_from_ascii_char_regex(token: RegexToken) -> GeneratedTerminalNode:
+    """Samples a single ascii character that matches the given RegexToken."""
+    return GeneratedTerminalNode(random.choice(token.ascii_chars))
+
+
+def _sample_wo_replacement_from_ascii_char_regex(
+    token: RegexToken, randomize: bool
 ) -> Iterator[GeneratedTerminalNode]:
-    """Generates all ascii characters that match the given RegexToken. """
-    return (
-        GeneratedTerminalNode(c)
-        for c in maybe_randomize(ASCII_CHARS, randomize)
-        if token.compiled.match(c)
-    )
+    """Generates all ascii characters that match the given RegexToken."""
+    chars = maybe_randomize(token.ascii_chars, randomize)
+    return (GeneratedTerminalNode(c) for c in chars)
+
+
+def sample_from_grammar_and_nonterminal(
+    scfg: SCFG, source_is_plan: bool = False, nonterminal: Nonterminal = "start"
+) -> GeneratedNonterminalNode:
+    """
+    Returns a single random uniform sample.
+    Assumes all nonterminals can produce a sample.
+    """
+    if source_is_plan:
+        grammar_by_alias = scfg.plan_grammar_keyed_by_alias
+        nonterminal_to_aliases = scfg.plan_nonterminal_to_aliases
+    else:
+        grammar_by_alias = scfg.utterance_grammar_keyed_by_alias
+        nonterminal_to_aliases = scfg.utterance_nonterminal_to_aliases
+
+    def sample_nt(nt: str) -> GeneratedNonterminalNode:
+        aliases = nonterminal_to_aliases[nt]
+        assert len(aliases), f"empty aliases for nt: {nt}"
+        alias = random.choice(aliases)
+        expansion = grammar_by_alias[alias]
+        result = [sample_token(t) for t in expansion]
+        return GeneratedNonterminalNode(tuple(result), alias)
+
+    def sample_token(token: SCFGToken) -> GeneratedNode:
+        if isinstance(token, RegexToken):
+            return _sample_from_ascii_char_regex(token)
+        elif isinstance(token, NonterminalToken):
+            return sample_nt(token.value)
+        elif isinstance(token, (EmptyToken, TerminalToken)):
+            return GeneratedTerminalNode(token.render())
+        else:
+            raise Exception(f"Unexpected Token: {token}")
+
+    return sample_nt(nonterminal)
 
 
 def generate_from_grammar_and_nonterminal(
@@ -189,6 +228,8 @@ def generate_from_grammar_and_nonterminal(
 ) -> Iterator[GeneratedNonterminalNode]:
     """
     Generate from a grammar, given a nonterminal.
+    If `randomize`, samples without replacement. Otherwise, enumerates.
+    TODO: Do we ever use the enumeration part? Or the w/o replacement part?
     """
     alias_to_iterator: Dict[Alias, Iterator[Tuple[GeneratedNode, ...]]] = {}
     aliases = copy(nonterminal_to_aliases[nonterminal])
@@ -205,7 +246,7 @@ def generate_from_grammar_and_nonterminal(
                     #  branch, and change the `cmspace -> !/ / , #e` rule in
                     #  smpa_fresh/fresh.scfg to be `cmspace -> !" " , #e`.
                     generations_per_token += (
-                        _generate_from_ascii_char_regex(token, randomize),
+                        _sample_wo_replacement_from_ascii_char_regex(token, randomize),
                     )
                 elif isinstance(token, NonterminalToken):
                     # functools.partial freezes `token`, otherwise weird
@@ -273,7 +314,7 @@ def sample_synchronously(
 
 
 def generate_synchronously(
-    scfg: SCFG, randomize: bool, nonterminal: Nonterminal = "start",
+    scfg: SCFG, randomize: bool, nonterminal: Nonterminal = "start"
 ) -> Iterator[Tuple[GeneratedNonterminalNode, GeneratedNonterminalNode]]:
     indexes = SourceToTargetIndexes.from_scfg(scfg, source_is_plan=False)
     for utterance_generated_node in generate_from_grammar_and_nonterminal(
@@ -298,17 +339,22 @@ def parse_and_render(
     :param source_is_plan: Whether the string is a plan or an utterance
     :param max_depth: When non-None, only parses with depth less than or equal
      to `max_depth` will be returned.
-    :return: If the string is a plan, return the utterance. If the string is an utternace,
+    :return: If the string is a plan, return the utterance. If the string is an utterance,
     return the plan.
     """
 
     grammar: CharGrammar = scfg.plan_earley if source_is_plan else scfg.utterance_earley
-    parses: Iterator[Tree] = grammar.parses(s, max_depth=max_depth)
-    for tree in parses:
-        for g in generate_from_parse_tree(
-            tree, scfg, source_is_plan=source_is_plan, randomize=False
-        ):
-            yield g.render_topological(with_treebank=False)
+    parses: Iterable[Tree] = grammar.parses(s, max_depth=max_depth)
+    if isinstance(parses, NotParsable):
+        return cast(Iterator[str], parses)
+    else:
+        return (
+            g.render()
+            for tree in parses
+            for g in generate_from_parse_tree(
+                tree, scfg, source_is_plan=source_is_plan, randomize=False
+            )
+        )
 
 
 def compute_branches(
@@ -316,10 +362,10 @@ def compute_branches(
     nonterminal_to_aliases: Dict[Nonterminal, List[Alias]],
     generation_so_far=None,
     nonterminals_expanded=None,
-    nonterminals_to_expand=None,
+    nonterminals_to_expand: Optional[List[SCFGToken]] = None,
     depth=0,
     max_depth=10,
-    branches: DefaultDict[int, List] = None,
+    branches: Optional[DefaultDict[int, List]] = None,
 ):
     """
     A CF grammar induces a tree, where the structure of the tree represents all possible left-to-right expansions
@@ -371,6 +417,7 @@ def compute_branches(
         # This means that there are no more nonterminals left to expand.
         next_index = len(nonterminals_to_expand)
 
+    assert nonterminal is not None
     aliases = nonterminal_to_aliases[nonterminal]
 
     next_nonterminals_expanded = copy(nonterminals_expanded)

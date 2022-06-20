@@ -64,7 +64,11 @@ def read_calflow_jsonl(
 
 
 def predict_plan_from_canonical(
-    scfg: SCFG, utterance: str, k: int = 1000, max_depth: int = 15,
+    scfg: SCFG,
+    utterance: str,
+    k: int = 1000,
+    max_depth: int = 15,
+    fallback_plan: str = " (FenceScope)",
 ) -> str:
     """
     Predicts a single Lispress surface string from the given canonical
@@ -93,7 +97,7 @@ def predict_plan_from_canonical(
         best_plan, _best_score = max(truncated_plans, key=itemgetter(1))
     except ValueError:
         # no candidates
-        best_plan = " (FenceScope)"
+        best_plan = fallback_plan
 
     # Remove leading space
     # TODO: Remove need for this by removing the space from the grammar

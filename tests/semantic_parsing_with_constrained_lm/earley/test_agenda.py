@@ -1,12 +1,15 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from semantic_parsing_with_constrained_lm.earley.agenda import Agenda, Meta
+import pytest
+
+from semantic_parsing_with_constrained_lm.earley.agenda import Agenda, MetaOps
 
 
-def test_push_pop():
-    a = Agenda()
-    z = Meta.zero()
+@pytest.mark.parametrize("use_backpointers", [True, False])
+def test_push_pop(use_backpointers: bool):
+    a = Agenda(use_backpointers=use_backpointers)
+    z = MetaOps.zero()
     assert a.push(3, z)
     assert a.push(5, z)
     # duplicate should be ignored

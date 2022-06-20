@@ -9,12 +9,12 @@ import traceback
 import warnings
 from dataclasses import dataclass
 from io import SEEK_SET, TextIOBase
-from typing import Iterator, List, TextIO
+from typing import Iterator, List, Optional, TextIO
 
 
 @dataclass
 class Tee(TextIOBase):
-    """"A write-only file-like object that forwards writes to `sinks`."""
+    """ "A write-only file-like object that forwards writes to `sinks`."""
 
     sinks: List[TextIO]
     closed: bool = False
@@ -57,16 +57,16 @@ class Tee(TextIOBase):
     def writable(self) -> bool:
         return True
 
-    def writelines(self, lines: List[str]) -> None:  # type: ignore
+    def writelines(self, lines: List[str]) -> None:
         for sink in self.sinks:
             sink.writelines(lines)
 
     @property
-    def encoding(self) -> str:  # type: ignore
+    def encoding(self) -> str:
         return self.sinks[0].encoding
 
     @property
-    def errors(self) -> str:  # type: ignore
+    def errors(self) -> Optional[str]:
         return self.sinks[0].errors
 
     def detach(self) -> None:

@@ -1,0 +1,958 @@
+# adapted from https://github.com/antlr/grammars-v4/blob/master/sql/sqlite/SQLiteParser.g4
+#
+# The MIT License (MIT)
+#
+# Copyright (c) 2014 by Bart Kiers
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+# associated documentation files (the "Software"), to deal in the Software without restriction,
+# including without limitation the rights to use, copy, modify, merge, publish, distribute,
+# sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all copies or
+# substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+# NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#
+# Project : sqlite-parser; an ANTLR4 grammar for SQLite https://github.com/bkiers/sqlite-parser
+# Developed by:
+#     Bart Kiers, bart@big-o.nl
+#     Martin Mirchev, marti_2203@abv.bg
+#     Mike Lische, mike@lischke-online.de
+
+
+
+parse -> ws_star sql_stmt_star
+
+sql_stmt -> explain? sql_stmt_tail
+
+terminated_maybe_sql_stmt -> sql_stmt? ws_star SCOL
+
+sql_stmt_star -> sql_stmt_plus?
+# final statement doesn't need to be terminated
+sql_stmt_plus -> sql_stmt ws_star_empty
+sql_stmt_plus -> terminated_maybe_sql_stmt ws_star sql_stmt_star
+
+
+explain -> EXPLAIN_ ws
+explain -> EXPLAIN_ ws QUERY_ ws PLAN_ ws
+
+sql_stmt_tail -> select_stmt
+# TODO: uncomment
+# sql_stmt_tail -> alter_table_stmt
+# sql_stmt_tail -> analyze_stmt
+
+# sql_stmt_tail -> begin_stmt
+# sql_stmt_tail -> commit_stmt
+# sql_stmt_tail -> create_index_stmt
+# sql_stmt_tail -> create_table_stmt
+# sql_stmt_tail -> create_trigger_stmt
+# sql_stmt_tail -> create_view_stmt
+# TODO: implement
+# sql_stmt_tail -> create_virtual_table_stmt
+# sql_stmt_tail -> delete_stmt
+# sql_stmt_tail -> delete_stmt_limited
+# sql_stmt_tail -> detach_stmt
+# sql_stmt_tail -> drop_stmt
+# sql_stmt_tail -> insert_stmt
+# sql_stmt_tail -> pragma_stmt
+# sql_stmt_tail -> reindex_stmt
+# sql_stmt_tail -> release_stmt
+# sql_stmt_tail -> rollback_stmt
+# sql_stmt_tail -> savepoint_stmt
+# sql_stmt_tail -> update_stmt
+# sql_stmt_tail -> update_stmt_limited
+# sql_stmt_tail -> vacuum_stmt
+
+
+schema_dot -> schema_name ws_star DOT
+
+ws_schema_dot -> ws schema_dot
+
+schema_dot_ws -> schema_dot ws_star
+
+
+# TODO: uncomment
+# alter_table_stmt -> ALTER_ ws TABLE_ ws_schema_dot? ws_star table_name ws alter_table_stmt_tail
+# alter_table_stmt_tail -> RENAME_ ws rename_tail
+# alter_table_stmt_tail -> ADD_ COLUMN_? column_def
+
+# TODO
+# rename_tail -> COLUMN_? old_column_name = column_name TO_ new_column_name = column_name
+rename_tail -> TO_ ws new_table_name
+
+
+analyze_stmt -> ANALYZE_ schema_or_table_or_index?
+
+
+schema_or_table_or_index -> ws schema_name
+schema_or_table_or_index -> ws_schema_dot? ws table_or_index_name
+
+attach_stmt -> ATTACH_ ws_database? ws expr ws AS_ ws schema_name
+
+ws_database -> ws DATABASE_
+
+begin_stmt -> BEGIN_ ws_begin_mod? named_transaction?
+
+ws_begin_mod -> ws begin_mod
+begin_mod -> DEFERRED_
+begin_mod -> IMMEDIATE_
+begin_mod -> EXCLUSIVE_
+
+named_transaction -> ws TRANSACTION_ ws_transaction_name?
+
+ws_transaction_name -> ws transaction_name
+
+
+commit_stmt -> commit_or_end ws_transaction?
+
+commit_or_end -> COMMIT_
+commit_or_end -> END_
+
+ws_transaction -> ws TRANSACTION_
+
+rollback_stmt -> ROLLBACK_ ws_transaction? ws_rollback_to?
+
+ws_savepoint -> ws SAVEPOINT_
+
+ws_savepoint_name -> ws savepoint_name
+
+ws_rollback_to -> ws TO_ ws_savepoint? ws_savepoint_name
+
+
+savepoint_stmt -> SAVEPOINT_ ws_savepoint_name
+
+
+release_stmt -> RELEASE_ ws_savepoint? ws_savepoint_name
+
+ws_unique -> ws UNIQUE_
+
+create_index_stmt -> CREATE_ ws_unique? ws INDEX_ ws_if_not_exists? ws_schema_dot? ws index_name ws ON_ ws table_name ws_star OPEN_PAR ws_star indexed_column comma_indexed_column_star ws_star CLOSE_PAR ws_where_expr?
+
+ws_where_expr -> ws WHERE_ ws expr
+
+comma_indexed_column_star -> comma_indexed_column_plus?
+comma_indexed_column_plus -> COMMA ws_star indexed_column ws_star comma_indexed_column_star
+
+
+ws_if_not_exists -> ws IF_ ws NOT_ ws EXISTS_
+
+indexed_column -> column_or_expr ws_collate_name? ws_asc_desc?
+
+column_or_expr -> column_name
+column_or_expr -> expr
+
+collate_name -> COLLATE_ ws collation_name
+
+ws_collate_name -> ws collate_name
+
+ws_asc_desc -> ws asc_desc
+
+
+create_table_stmt -> CREATE_ ws_temp? TABLE_ ws_if_not_exists? ws_schema_dot? table_name create_table_stmt_tail
+
+create_table_stmt_tail -> AS_ ws select_stmt
+create_table_stmt_tail -> OPEN_PAR column_def column_def_star table_constraint_star CLOSE_PAR without_row?
+
+column_def_star -> column_def_plus?
+column_def_plus -> COMMA column_def column_def_star
+
+table_constraint_star -> table_constraint_plus?
+table_constraint_plus -> COMMA table_constraint table_constraint_star
+
+# TODO: what is this `row_ROW_ID` junk?
+without_row -> WITHOUT_ " row_ROW_ID = " IDENTIFIER
+
+ws_temp -> ws temp
+
+temp -> TEMP_
+temp -> TEMPORARY_
+
+
+column_def -> column_name type_name? column_constraint_star
+
+column_constraint_star -> column_constraint_plus?
+column_constraint_plus -> column_constraint column_constraint_star
+
+
+type_name -> name? type_name_tail?
+
+type_name_tail -> OPEN_PAR signed_number CLOSE_PAR
+type_name_tail -> OPEN_PAR signed_number COMMA signed_number CLOSE_PAR
+
+
+column_constraint -> constraint_name? column_constraint_tail
+
+constraint_name -> CONSTRAINT_ ws name
+
+ws_conflict_clause -> ws conflict_clause
+
+column_constraint_tail -> primary_key ws_asc_desc? conflict_clause? AUTOINCREMENT_?
+column_constraint_tail -> not_null_or_unique ws_conflict_clause?
+column_constraint_tail -> CHECK_ ws_star parened_expr
+column_constraint_tail -> DEFAULT_ default_tail
+column_constraint_tail -> collate_name
+column_constraint_tail -> foreign_key_clause
+column_constraint_tail -> generated_always? AS_ ws_star parened_expr ws_star stored_or_virtual?
+
+primary_key -> PRIMARY_ ws KEY_
+
+not_null_or_unique -> not_null
+not_null_or_unique -> UNIQUE_
+
+default_tail -> ws signed_number
+default_tail -> ws literal_value
+default_tail -> ws_star parened_expr
+
+parened_expr -> OPEN_PAR ws_star expr ws_star CLOSE_PAR
+
+generated_always -> GENERATED_ ws ALWAYS_ ws
+
+stored_or_virtual -> STORED_
+stored_or_virtual -> VIRTUAL_
+
+
+signed_number -> PLUS_MINUS? NUMERIC_LITERAL
+
+
+
+table_constraint -> constraint_name? table_constraint_tail
+
+table_constraint_tail -> primary_key_or_unique OPEN_PAR indexed_column comma_indexed_column_star CLOSE_PAR conflict_clause?
+table_constraint_tail -> CHECK_ OPEN_PAR expr CLOSE_PAR
+table_constraint_tail -> FOREIGN_ ws KEY_ ws column_name_list foreign_key_clause
+
+comma_column_name_plus -> COMMA ws_star column_name comma_column_name_star
+comma_column_name_star -> comma_column_name_plus?
+
+comma_column_name_plus -> column_name comma_column_name_star
+
+
+primary_key_or_unique -> primary_key
+primary_key_or_unique -> UNIQUE_
+
+
+foreign_key_clause -> REFERENCES_ ws foreign_table ws_column_name_list? foreign_key_clause_on_or_match_star foreign_key_clause_mod?
+
+foreign_key_clause_mod -> ws_not? DEFERRABLE_ initially_deferred_or_immediate?
+
+ws_not -> ws NOT_
+
+initially_deferred_or_immediate -> ws INITIALLY_ ws deferred_or_immediate
+
+deferred_or_immediate -> DEFERRED_
+deferred_or_immediate -> IMMEDIATE_
+
+
+delete_or_update -> DELETE_
+delete_or_update -> UPDATE_
+
+foreign_key_clause_on_or_match_star -> foreign_key_clause_on_or_match_plus?
+foreign_key_clause_on_or_match_plus -> foreign_key_clause_on_or_match foreign_key_clause_on_or_match_star
+
+foreign_key_clause_on_or_match -> MATCH_ ws name
+foreign_key_clause_on_or_match -> ON_ ws delete_or_update ws foreign_key_clause_on_tail
+foreign_key_clause_on_tail -> SET_ ws null_or_default
+foreign_key_clause_on_tail -> CASCADE_
+foreign_key_clause_on_tail -> RESTRICT_
+foreign_key_clause_on_tail -> NO_ ws ACTION_
+
+null_or_default -> NULL_
+null_or_default -> DEFAULT_
+
+
+
+conflict_clause -> ON_ ws CONFLICT_ ws conflict_clause_tail
+
+conflict_clause_tail -> ROLLBACK_
+conflict_clause_tail -> ABORT_
+conflict_clause_tail -> FAIL_
+conflict_clause_tail -> IGNORE_
+conflict_clause_tail -> REPLACE_
+
+
+create_trigger_stmt -> CREATE_ ws_temp? ws TRIGGER_ ws_if_not_exists? ws_schema_dot? ws trigger_name before_after_or_instead_of? ws delete_or_insert_or_update_columns ws ON_ ws table_name for_each_row? ws_when_expr? ws BEGIN_ update_or_insert_or_delete_or_select_plus ws END_
+
+
+before_after_or_instead_of -> ws BEFORE_
+before_after_or_instead_of -> ws AFTER_
+before_after_or_instead_of -> ws INSTEAD_ ws OF_
+
+for_each_row -> ws FOR_ ws EACH_ ws ROW_
+
+update_or_insert_or_delete_or_select -> update_stmt
+update_or_insert_or_delete_or_select -> insert_stmt
+update_or_insert_or_delete_or_select -> delete_stmt
+update_or_insert_or_delete_or_select -> select_stmt
+
+update_or_insert_or_delete_or_select_plus -> ws update_or_insert_or_delete_or_select ws_star SCOL ws_star update_or_insert_or_delete_or_select_star
+update_or_insert_or_delete_or_select_star -> update_or_insert_or_delete_or_select_plus?
+
+of_comma_column_name_plus -> OF_ ws comma_column_name_plus
+
+delete_or_insert_or_update_columns -> DELETE_
+delete_or_insert_or_update_columns -> INSERT_
+delete_or_insert_or_update_columns -> UPDATE_ of_comma_column_name_plus?
+
+
+
+create_view_stmt -> CREATE_ ws_temp? ws VIEW_ ws_if_not_exists? ws_schema_dot? ws_star view_name ws_column_name_list? ws AS_ ws select_stmt
+
+
+create_virtual_table_stmt -> CREATE_ VIRTUAL_ TABLE_ ws_if_not_exists? ws_schema_dot? table_name USING_ module_name module_argument_list?
+
+module_argument_list -> OPEN_PAR module_argument_plus CLOSE_PAR
+
+module_argument_plus -> module_argument module_argument_star
+
+module_argument_star -> module_argument_plus?
+module_argument_plus -> COMMA module_argument module_argument_star
+
+
+
+with_clause -> WITH_ ws_recursive? cte_table_name ws AS_ ws_star paren_select table_as_select_star
+
+ws_recursive -> ws RECURSIVE_
+
+paren_select -> OPEN_PAR ws_star select_stmt ws_star CLOSE_PAR
+
+table_as_select_plus -> COMMA ws_star cte_table_name ws_star AS_ ws_star paren_select ws_star table_as_select_star
+
+table_as_select_star -> table_as_select_plus?
+
+
+
+
+cte_table_name -> table_name ws_column_name_list?
+
+
+recursive_cte -> cte_table_name ws AS_ ws_star OPEN_PAR initial_select UNION_ ws_all? recursive__select CLOSE_PAR
+
+ws_all -> ws ALL_
+
+
+
+common_table_expression -> table_name ws_column_name_list? ws AS_ ws_star paren_select
+
+
+delete_stmt -> with_clause? DELETE_ ws FROM_ ws qualified_table_name ws_where_expr?
+
+
+delete_stmt_limited -> with_clause? DELETE_ FROM_ qualified_table_name ws_where_expr? order_by_limit?
+
+ws_order_by -> ws order_by_stmt
+
+order_by_limit -> ws_order_by? ws limit_stmt
+
+
+
+detach_stmt -> DETACH_ ws_database? schema_name
+
+
+drop_stmt -> DROP_ " object = " droppable if_exists? ws_schema_dot? any_name
+
+if_exists -> IF_ ws EXISTS_
+
+droppable -> INDEX_
+droppable -> TABLE_
+droppable -> TRIGGER_
+droppable -> VIEW_
+
+# To avoid repeated strings of `language != 'English' != 'English' != ...`,
+# we divide expressions into those that can start with a binary operator and thos
+# that can't.
+# Then we disallow two directly nested binops.
+
+expr -> binop_expr
+expr -> non_binop_expr
+
+# Disallow two directly nested binops.
+# TODO: it's valid SQL, but never appears in Spider
+# binop_expr -> expr expr_binop expr
+binop_expr -> non_binop_expr expr_binop non_binop_expr
+binop_expr -> expr_compound
+
+non_binop_expr -> expr_base_case
+non_binop_expr -> non_binop_expr_compound
+
+expr_base_case -> literal_value
+expr_base_case -> BIND_PARAMETER
+expr_base_case -> possibly_qualified_column_name
+
+expr_compound -> unary_operator ws expr
+# TODO: not used in Spider
+# expr_compound -> simple_function_invocation
+expr_compound -> aggregate_function_invocation
+expr_compound -> CAST_ ws OPEN_PAR ws expr ws AS_ ws type_name ws CLOSE_PAR
+expr_compound -> CASE_ ws ws_expr? ws when_then_plus ws ws_else_expr? ws END_
+expr_compound -> maybe_not_exists? paren_select
+expr_compound -> paren_expr_list
+
+# left-corner. problem? no
+expr_compound -> expr binary_operator expr
+expr_compound -> expr ws_not? ws like_glob_regex_match ws expr ws_escape?
+expr_compound -> expr ws_collate_name
+expr_compound -> expr ws nullness
+expr_compound -> expr ws_not? ws BETWEEN_ ws expr ws AND_ ws expr
+expr_compound -> expr ws_not? ws IN_ ws_in_clause
+
+non_binop_expr_compound -> unary_operator ws expr
+# TODO: not used in Spider
+# expr_compound -> simple_function_invocation
+non_binop_expr_compound -> aggregate_function_invocation
+non_binop_expr_compound -> CAST_ ws OPEN_PAR ws expr ws AS_ ws type_name ws CLOSE_PAR
+non_binop_expr_compound -> CASE_ ws ws_expr? ws when_then_plus ws ws_else_expr? ws END_
+non_binop_expr_compound -> maybe_not_exists? paren_select
+non_binop_expr_compound -> paren_expr_list
+
+# TODO: it's valid SQL, but never appears in Spider
+non_binop_expr_compound -> non_binop_expr binary_operator non_binop_expr
+non_binop_expr_compound -> non_binop_expr ws_not? ws like_glob_regex_match ws non_binop_expr ws_escape?
+non_binop_expr_compound -> non_binop_expr ws_collate_name
+non_binop_expr_compound -> non_binop_expr ws nullness
+non_binop_expr_compound -> non_binop_expr ws_not? ws BETWEEN_ ws non_binop_expr ws AND_ ws non_binop_expr
+non_binop_expr_compound -> non_binop_expr ws_not? ws IN_ ws_in_clause
+
+# TODO
+# expr_compound -> raise_function
+
+
+when_expr -> WHEN_ ws expr
+
+ws_when_expr -> ws when_expr
+
+when_then -> when_expr ws THEN_ ws expr
+
+when_then_plus -> when_then when_then_star
+
+when_then_star -> when_then_plus?
+
+
+ws_in_clause -> ws_star OPEN_PAR ws_star select_or_exprs? ws_star CLOSE_PAR
+ws_in_clause -> ws_schema_dot? table_name
+ws_in_clause -> ws_schema_dot? table_function_name ws_star OPEN_PAR ws_star ws_exprs? ws_star CLOSE_PAR
+
+select_or_exprs -> select_stmt
+select_or_exprs -> expr_comma_plus
+
+ws_exprs -> ws expr_comma_plus
+
+
+table_dot -> table_name ws_star DOT ws_star
+
+
+# /*
+#  SQLite understands the following binary operators, in order from highest to lowest precedence:
+#     ||
+#     * / %
+#     + -
+#     << >> & |
+#     < <= > >=
+#     = == != <> IS IS NOT IN LIKE GLOB MATCH REGEXP
+#     AND
+#     OR
+#  */
+binary_operator -> ws_star PIPE2 ws_star
+binary_operator -> ws_star star_div_mod ws_star expr ws
+binary_operator -> ws_star PLUS_MINUS ws_star
+binary_operator -> ws_star lt_gt_amp_pipe ws_star
+binary_operator -> ws_star lt_lteq_gt_gteq ws_star
+binary_operator -> ws AND_ ws
+binary_operator -> ws OR_ ws
+binary_operator -> ws IS_ ws_not? ws
+# TODO: undo Spider-specific hack?
+# binary_operator -> expr_binop
+
+
+
+lt_gt_amp_pipe -> LT2
+lt_gt_amp_pipe -> GT2
+lt_gt_amp_pipe -> AMP
+lt_gt_amp_pipe -> PIPE
+
+
+lt_lteq_gt_gteq -> LT
+lt_lteq_gt_gteq -> LT_EQ
+lt_lteq_gt_gteq -> GT
+lt_lteq_gt_gteq -> GT_EQ
+
+expr_binop -> ws_star ASSIGN ws_star
+expr_binop -> ws_star EQ ws_star
+expr_binop -> ws_star NOT_EQ1 ws_star
+expr_binop -> ws_star NOT_EQ2 ws_star
+expr_binop -> ws IS_ ws
+expr_binop -> ws IS_ ws NOT_ ws
+expr_binop -> ws IN_ ws
+expr_binop -> ws_not? ws LIKE_ ws
+expr_binop -> ws GLOB_ ws
+expr_binop -> ws MATCH_ ws
+expr_binop -> ws_not? ws REGEXP_ ws
+
+star_div_mod -> STAR
+star_div_mod -> DIV
+star_div_mod -> MOD
+
+not_null -> NOT_ ws NULL_
+
+nullness -> ISNULL_
+nullness -> NOTNULL_
+nullness -> not_null
+
+comma_expr -> ws_star COMMA ws_star expr
+
+expr_comma_plus -> expr comma_expr_star
+
+comma_expr_star -> comma_expr_plus?
+comma_expr_plus -> comma_expr comma_expr_star
+
+paren_expr_list -> OPEN_PAR ws_star expr_comma_plus ws_star CLOSE_PAR
+
+maybe_not_exists -> ws_not? ws EXISTS_ ws
+
+ws_expr -> ws expr
+
+ws_filter -> ws_star filter_clause
+
+ws_over -> ws over_clause
+
+ws_escape -> ws ESCAPE_ ws expr
+
+like_glob_regex_match -> LIKE_
+like_glob_regex_match -> GLOB_
+like_glob_regex_match -> REGEXP_
+like_glob_regex_match -> MATCH_
+
+ws_else_expr -> ws ELSE_ ws expr
+
+
+
+
+
+# TODO
+# raise_function:
+#     RAISE_ OPEN_PAR (
+#         IGNORE_
+#         | (ROLLBACK_ | ABORT_ | FAIL_) COMMA error_message
+#     ) CLOSE_PAR
+
+
+literal_value -> literal_value_complex
+literal_value -> NULL_
+literal_value -> TRUE_
+literal_value -> FALSE_
+literal_value -> CURRENT_TIME_
+literal_value -> CURRENT_DATE_
+literal_value -> CURRENT_TIMESTAMP_
+
+literal_value_complex -> NUMERIC_LITERAL
+literal_value_complex -> STRING_LITERAL
+literal_value_complex -> BLOB_LITERAL
+
+# TODO
+# insert_stmt:
+#     with_clause? (
+#         INSERT_
+#         | REPLACE_
+#         | INSERT_ OR_ (
+#             REPLACE_
+#             | ROLLBACK_
+#             | ABORT_
+#             | FAIL_
+#             | IGNORE_
+#         )
+#     ) INTO_ ws_schema_dot? table_name (AS_ table_alias)? ws_column_name_list? (
+#         (
+#             VALUES_ paren_expr_list (
+#                 COMMA OPEN_PAR expr ( COMMA expr)* CLOSE_PAR
+#             )*
+#             | select_stmt
+#         ) upsert_clause?
+#     )
+#     | DEFAULT_ VALUES_
+
+# TODO
+# upsert_clause:
+#     ON_ CONFLICT_ (
+#         OPEN_PAR indexed_column comma_indexed_column_star CLOSE_PAR ws_where_expr?
+#     )? DO_ (
+#         NOTHING_
+#         | UPDATE_ SET_ (
+#             column_name_or_list EQ expr (
+#                 COMMA column_name_or_list EQ expr
+#             )* ws_where_expr?
+#         )
+#     )
+
+column_name_or_list -> column_name
+column_name_or_list -> column_name_list
+
+# TODO
+# pragma_stmt:
+#     PRAGMA_ ws_schema_dot? pragma_name (
+#         ASSIGN pragma_value
+#         | OPEN_PAR pragma_value CLOSE_PAR
+#     )?
+
+
+# TODO
+# pragma_value:
+#     signed_number
+#     | name
+#     | STRING_LITERAL
+
+
+# TODO: implement
+# reindex_stmt:
+#     REINDEX_ (collation_name | ws_schema_dot? (table_name | index_name))?
+
+
+select_stmt -> common_table_stmt? select_core_plus ws_order_by? ws_limit?
+
+select_core_plus -> select_core compound_select_star
+
+compound_select_star -> compound_select_plus?
+compound_select_plus -> ws compound_operator ws select_core compound_select_star
+
+ws_limit -> ws limit_stmt
+
+
+
+join_clause -> table_or_subquery join_star
+
+join_star -> join_plus?
+join_plus -> ws join_operator table_or_subquery ws_join_constraint? join_star
+
+ws_join_constraint -> ws join_constraint
+
+select_core -> SELECT_ ws_distinct_or_all? ws result_column_plus from_table? ws_where_expr? group_by? window_clause?
+# TODO: uncomment
+# select_core -> VALUES_ paren_expr_list comma_paren_expr_list_star
+
+window_clause -> ws WINDOW_ ws window_as comma_window_as_star
+
+window_as -> window_name ws AS_ ws window_defn
+
+comma_window_as_plus -> ws_star COMMA ws_star window_as comma_window_as_star, ws_star COMMA ws_star window_as comma_window_as_star
+comma_window_as_star -> comma_window_as_plus?
+
+ws_having -> ws HAVING_ ws expr
+
+group_by -> ws GROUP_ ws BY_ ws expr_comma_plus ws_having?
+
+from_table -> ws FROM_ ws table_or_subquery_plus_or_join
+
+result_column_plus -> result_column comma_result_column_star
+
+comma_result_column_plus -> ws_star COMMA ws_star result_column comma_result_column_star
+comma_result_column_star -> comma_result_column_plus?
+
+comma_table_or_subquery_plus -> ws_star COMMA ws_star table_or_subquery comma_table_or_subquery_star, ws_star COMMA ws_star table_or_subquery comma_table_or_subquery_star
+comma_table_or_subquery_star -> comma_table_or_subquery_plus?
+
+table_or_subquery_plus -> table_or_subquery comma_table_or_subquery_star
+
+table_or_subquery_plus_or_join -> table_or_subquery_plus
+table_or_subquery_plus_or_join -> join_clause
+
+comma_paren_expr_list_plus -> COMMA ws_star paren_expr_list ws_star comma_paren_expr_list_star, COMMA ws_star paren_expr_list ws_star comma_paren_expr_list_star
+comma_paren_expr_list_star -> comma_paren_expr_list_plus?
+
+distinct_or_all -> DISTINCT_
+distinct_or_all -> ALL_
+
+ws_distinct_or_all -> ws distinct_or_all
+
+
+# TODO: unused?
+# factored_select_stmt -> select_stmt
+
+# TODO: unused?
+# simple_select_stmt -> common_table_ws? select_core ws_order_by? ws_limit?
+
+common_table_ws -> common_table_stmt ws
+
+table_or_subquery -> schema_dot_ws? table_name as_table? indexed_or_not?
+# TODO: not used in Spider. is it actually legal?
+# table_or_subquery -> schema_dot_ws? table_function_name ws_star paren_expr_list as_table?
+table_or_subquery -> OPEN_PAR ws_star table_or_subquery_or_join ws_star CLOSE_PAR
+table_or_subquery -> paren_select as_table?
+
+as_table -> ws_as? ws table_alias
+
+table_or_subquery_or_join -> table_or_subquery_plus
+table_or_subquery_or_join -> join_clause
+
+result_column -> STAR
+result_column -> expr as_column_alias?
+result_column -> table_dot STAR
+
+ws_as -> ws AS_
+
+as_column_alias  -> ws_as? column_alias
+
+join_operator -> COMMA ws_star
+join_operator -> natural_ws? left_outer_inner_cross? JOIN_ ws
+
+natural_ws -> NATURAL_ ws
+
+left_outer_inner_cross -> LEFT_ ws
+left_outer_inner_cross -> LEFT_ ws OUTER_ ws
+left_outer_inner_cross -> INNER_ ws
+left_outer_inner_cross -> CROSS_ ws
+
+
+join_constraint -> ON_ ws expr
+join_constraint -> USING_ ws column_name_list
+
+
+compound_operator -> UNION_ ws_all?
+compound_operator -> INTERSECT_
+compound_operator -> EXCEPT_
+
+
+# TODO
+# update_stmt:
+#     with_clause? UPDATE_ (
+#         OR_ (ROLLBACK_ | ABORT_ | REPLACE_ | FAIL_ | IGNORE_)
+#     )? qualified_table_name SET_ column_name_or_list ASSIGN expr (
+#         COMMA column_name_or_list ASSIGN expr
+#     )* ws_where_expr?
+
+
+column_name_list -> OPEN_PAR comma_column_name_plus CLOSE_PAR
+
+
+ws_column_name_list -> ws column_name_list
+
+# TODO
+# update_stmt_limited:
+#     with_clause? UPDATE_ (
+#         OR_ (ROLLBACK_ | ABORT_ | REPLACE_ | FAIL_ | IGNORE_)
+#     )? qualified_table_name SET_ column_name_or_list ASSIGN expr (COMMA column_name_or_list ASSIGN expr)* ws_where_expr? order_by_limit?
+
+
+qualified_table_name -> ws_schema_dot? ws_star table_name as_alias? indexed_or_not?
+
+as_alias -> ws AS_ ws alias
+
+indexed_or_not -> ws INDEXED_ ws BY_ ws index_name
+indexed_or_not -> ws NOT_ ws INDEXED_
+
+# TODO
+# vacuum_stmt:
+#     VACUUM_ schema_name? (INTO_ filename)?
+
+
+filter_clause -> FILTER_ ws_star OPEN_PAR ws_star WHERE_ ws expr ws_star CLOSE_PAR
+
+
+window_defn -> OPEN_PAR base_window_name? partition_by? order_by_stmt frame_spec? CLOSE_PAR
+
+partition_by -> PARTITION_ ws BY_ ws expr_comma_plus
+
+over_clause -> OVER_ over_tail
+
+over_tail -> window_name
+over_tail -> OPEN_PAR base_window_name? partition_by? ws_order_by? frame_spec? ws_star CLOSE_PAR
+
+
+frame_spec -> ws frame_clause ws_frame_spec_tail?
+
+ws_frame_spec_tail -> ws frame_spec_tail
+
+frame_spec_tail -> EXCLUDE_ ws NO_ ws OTHERS_
+frame_spec_tail -> CURRENT_ ws ROW_
+frame_spec_tail -> GROUP_
+frame_spec_tail -> TIES_
+
+frame_clause -> frame_clause_head ws frame_clause_tail
+frame_clause_head -> RANGE_
+frame_clause_head -> ROWS_
+frame_clause_head -> GROUPS_
+frame_clause_tail -> frame_single
+# TODO: implement
+# frame_clause_tail -> BETWEEN_ ws frame_left ws AND_ ws frame_right
+
+
+simple_function_invocation -> simple_func ws_star OPEN_PAR ws_star expr_comma_plus_or_star ws_star CLOSE_PAR
+
+expr_comma_plus_or_star -> expr_comma_plus
+expr_comma_plus_or_star -> STAR
+
+aggregate_function_invocation -> aggregate_func ws_star OPEN_PAR ws_star distinct_exprs_or_star? ws_star CLOSE_PAR ws_filter? ws_over?
+
+distinct_ws -> DISTINCT_ ws
+
+distinct_exprs_or_star -> distinct_ws? expr_comma_plus
+distinct_exprs_or_star -> STAR
+
+
+# TODO
+# window_function_invocation:
+#     window_function OPEN_PAR (expr_comma_plus | STAR)? CLOSE_PAR ws_filter? OVER_ (
+#         window_defn
+#         | window_name
+#     )
+
+# TODO: comment out
+common_table_stmt -> #e
+# TODO: uncomment
+# common_table_stmt -> WITH_ ws_recursive? ws common_table_expression comma_common_table_expression_star
+
+# TODO: check
+comma_common_table_expression_plus -> COMMA ws_star common_table_expression ws_star comma_common_table_expression_star
+comma_common_table_expression_star -> comma_common_table_expression_plus?
+
+order_by_stmt -> ORDER_ ws BY_ ws ordering_term_plus
+
+comma_ordering_term_plus -> ws_star COMMA ws_star ordering_term_plus
+
+ordering_term_plus -> ordering_term comma_ordering_term_plus?
+
+
+limit_stmt -> LIMIT_ ws expr offset_or_comma_expr?
+
+# `LIMIT 2,1` is equivalent to `LIMIT 1 OFFSET 2`
+offset_or_comma_expr -> offset_or_comma expr
+
+offset_or_comma -> ws OFFSET_ ws
+offset_or_comma -> ws_star COMMA ws_star
+
+
+ordering_term -> expr ws_collate_name? ws_asc_desc? nulls_first_or_last?
+
+nulls_first_or_last -> ws NULLS_ ws first_or_last
+
+first_or_last -> FIRST_
+first_or_last -> LAST_
+
+asc_desc -> ASC_
+asc_desc -> DESC_
+
+# TODO
+# frame_left:
+#     expr PRECEDING_
+#     | expr FOLLOWING_
+#     | CURRENT_ ROW_
+#     | UNBOUNDED_ PRECEDING_
+
+# TODO
+# frame_right:
+#     expr PRECEDING_
+#     | expr FOLLOWING_
+#     | CURRENT_ ROW_
+#     | UNBOUNDED_ FOLLOWING_
+
+frame_single -> expr ws PRECEDING_
+frame_single -> UNBOUNDED_ ws PRECEDING_
+frame_single -> CURRENT_ ws ROW_
+
+# unknown
+
+# window_function:
+#     (FIRST_VALUE_ | LAST_VALUE_) OPEN_PAR expr CLOSE_PAR OVER_ OPEN_PAR partition_by? order_by_expr_asc_desc frame_clause
+#         ? CLOSE_PAR
+#     | (CUME_DIST_ | PERCENT_RANK_) OPEN_PAR CLOSE_PAR OVER_ OPEN_PAR partition_by? order_by_expr? CLOSE_PAR
+#     | (DENSE_RANK_ | RANK_ | ROW_NUMBER_) OPEN_PAR CLOSE_PAR OVER_ OPEN_PAR partition_by? order_by_expr_asc_desc
+#         CLOSE_PAR
+#     | (LAG_ | LEAD_) OPEN_PAR expr of_OF_fset? default_DEFAULT__value? CLOSE_PAR OVER_ OPEN_PAR partition_by?
+#         order_by_expr_asc_desc CLOSE_PAR
+#     | NTH_VALUE_ OPEN_PAR expr COMMA signed_number CLOSE_PAR OVER_ OPEN_PAR partition_by? order_by_expr_asc_desc
+#         frame_clause? CLOSE_PAR
+#     | NTILE_ OPEN_PAR expr CLOSE_PAR OVER_ OPEN_PAR partition_by? order_by_expr_asc_desc CLOSE_PAR
+
+
+
+of_OF_fset -> COMMA signed_number
+
+
+default_DEFAULT__value -> COMMA signed_number
+
+
+partition_by -> PARTITION_ ws BY_ ws expr_plus
+
+
+order_by_expr -> ORDER_ ws BY_ ws expr_plus
+
+expr_plus -> expr ws expr_star
+expr_star -> expr_plus?
+
+
+order_by_expr_asc_desc -> ORDER_ BY_ order_by_expr_asc_desc
+
+
+expr_asc_desc -> expr ws_asc_desc? comma_expr_asc_desc_star
+
+comma_expr_asc_desc_plus -> COMMA ws_star expr ws_asc_desc? ws_star comma_expr_asc_desc_star
+comma_expr_asc_desc_star -> comma_expr_asc_desc_plus?
+
+
+# TODO BOTH OF THESE HAVE TO BE REWORKED TO FOLLOW THE SPEC
+initial_select -> select_stmt
+
+
+recursive__select -> select_stmt
+
+
+unary_operator -> MINUS
+unary_operator -> PLUS
+unary_operator -> TILDE
+unary_operator -> NOT_
+
+
+error_message -> STRING_LITERAL
+
+
+# TODO check what exactly is permitted here
+module_argument -> expr
+module_argument -> column_def
+
+
+column_alias -> IDENTIFIER
+column_alias -> STRING_LITERAL
+
+
+# TODO: check all names below
+
+name -> any_name
+function_name -> any_name
+table_or_index_name -> any_name
+new_table_name -> any_name
+collation_name -> any_name
+foreign_table -> any_name
+index_name -> any_name
+trigger_name -> any_name
+view_name -> any_name
+module_name -> any_name
+pragma_name -> any_name
+savepoint_name -> any_name
+transaction_name -> any_name
+window_name -> any_name
+alias -> any_name
+filename -> any_name
+base_window_name -> any_name
+simple_func -> any_name
+table_function_name -> any_name
+
+# TODO: these are the only ones used in Spider
+# aggregate_func -> any_name
+aggregate_func -> MAX_
+aggregate_func -> MIN_
+aggregate_func -> COUNT_
+aggregate_func -> SUM_
+aggregate_func -> AVG_
+
+MAX_ -> m a x
+MIN_ -> m i n
+COUNT_ -> c o u n t
+SUM_ -> s u m
+AVG_ -> a v g
+
+any_name -> IDENTIFIER
+any_name -> STRING_LITERAL
+any_name -> OPEN_PAR ws_star any_name ws_star CLOSE_PAR

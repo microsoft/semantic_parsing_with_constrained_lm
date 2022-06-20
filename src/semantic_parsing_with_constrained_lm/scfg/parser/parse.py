@@ -1,7 +1,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-import json
 from pathlib import Path
 from typing import Any, List, Tuple, Union, cast
 
@@ -9,12 +8,18 @@ from lark import Lark, Transformer, v_args
 from lark.exceptions import UnexpectedEOF  # type: ignore[attr-defined]
 
 from semantic_parsing_with_constrained_lm.scfg.parser.macro import Macro
-from semantic_parsing_with_constrained_lm.scfg.parser.rule import Rule, SyncRule, UtteranceRule
+from semantic_parsing_with_constrained_lm.scfg.parser.rule import (
+    PlanRule,
+    Rule,
+    SyncRule,
+    UtteranceRule,
+    mirrored_rule,
+)
 from semantic_parsing_with_constrained_lm.scfg.parser.token import (
     EmptyToken,
-    EntitySchema,
     MacroToken,
     NonterminalToken,
+    OptionableSCFGToken,
     RegexToken,
     SCFGToken,
     TerminalToken,
@@ -22,7 +27,7 @@ from semantic_parsing_with_constrained_lm.scfg.parser.token import (
 from semantic_parsing_with_constrained_lm.scfg.parser.types import Expansion
 
 
-def parse_string(parser: Lark, string: str) -> Any:
+def parse_string(parser: Lark, string: str) -> Any:  # -> Union[Rule, Macro]:
     """
     Parse a string into a Rule or an Expansion.
 
@@ -36,14 +41,6 @@ def parse_string(parser: Lark, string: str) -> Any:
 
 
 class TreeToRule(Transformer):
-    def get_terminal_value(self, args, default_before):
-        if len(args) > 1:
-            base = json.loads(args[1].value)
-            return json.dumps("" + base)
-        else:
-            base = json.loads(args[0].value)
-            return json.dumps(default_before + base)
-
     @v_args(inline=True)
     def start(self, arg) -> Union[Macro, Rule]:
         return arg
@@ -52,17 +49,13 @@ class TreeToRule(Transformer):
     def start_for_test(self, arg) -> Union[Macro, Expansion, Rule]:
         return arg
 
-    def terminal_with_space(self, args) -> TerminalToken:
-        return TerminalToken(self.get_terminal_value(args, " "), optional=False)
+    @v_args(inline=True)
+    def terminal(self, underlying) -> TerminalToken:
+        return TerminalToken(underlying.value, optional=False)
 
-    def optional_terminal_with_space(self, args) -> TerminalToken:
-        return TerminalToken(self.get_terminal_value(args, " "), optional=True)
-
-    def terminal_without_space(self, args) -> TerminalToken:
-        return TerminalToken(self.get_terminal_value(args, ""), optional=False)
-
-    def optional_terminal_without_space(self, args) -> TerminalToken:
-        return TerminalToken(self.get_terminal_value(args, ""), optional=True)
+    @v_args(inline=True)
+    def optional_terminal(self, underlying) -> TerminalToken:
+        return TerminalToken(underlying.value, optional=True)
 
     @v_args(inline=True)
     def nonterminal(self, name_token) -> NonterminalToken:
@@ -76,56 +69,40 @@ class TreeToRule(Transformer):
     def empty(self) -> EmptyToken:
         return EmptyToken()
 
-    def regex_with_space(self, args) -> RegexToken:
-        if len(args) > 1:
-            prefix = ""
-            value = args[1].value
-        else:
-            prefix = " "
-            value = args[0].value
-
-        return RegexToken(value, optional=False, prefix=prefix)
-
-    def regex_without_space(self, arg) -> RegexToken:
-        return RegexToken(arg[0].value, optional=False, prefix="")
+    @v_args(inline=True)
+    def regex(self, arg) -> RegexToken:
+        return RegexToken(arg.value, optional=False, prefix="")
 
     def plan_expansion(self, args) -> Expansion:
-        return args
+        return tuple(args)
 
     def utterance_expansion(self, args) -> Expansion:
-        return args
+        return tuple(args)
 
-    def utterance_expansions(self, no_macro_expansions) -> List[Expansion]:
-        return no_macro_expansions
-
-    @v_args(inline=True)
-    def utterance_token(self, arg) -> SCFGToken:
-        return arg
+    def utterance_expansions(self, no_macro_expansions) -> Tuple[Expansion, ...]:
+        return tuple(no_macro_expansions)
 
     @v_args(inline=True)
-    def plan_token(self, arg) -> SCFGToken:
+    def token(self, arg: SCFGToken) -> SCFGToken:
         return arg
 
     @v_args(inline=True)
     def rule(self, name_token) -> str:
         return name_token.value
 
-    def sync_rule(self, args) -> SyncRule:
-        if len(args) > 3:
-            rule, entity_annotation, expansions, expansion = args
-            return SyncRule(rule, expansions, expansion, entity_annotation)
-        else:
-            rule, expansions, expansion = args
-            return SyncRule(rule, expansions, expansion, None)
+    @v_args(inline=True)
+    def sync_rule(
+        self, lhs: str, expansions: List[Expansion], expansion: Expansion
+    ) -> SyncRule:
+        return SyncRule(lhs=lhs, utterance_rhss=tuple(expansions), plan_rhs=expansion)
+
+    @v_args(inline=True)
+    def mirrored_rule(self, lhs: str, rhs: Expansion) -> SyncRule:
+        return mirrored_rule(lhs, rhs)
 
     @v_args(inline=True)
     def utterance_rule(self, rule, expansions) -> UtteranceRule:
-        return UtteranceRule(rule, expansions)
-
-    def entity_annotation(self, args) -> EntitySchema:
-        if len(args) > 1:
-            return EntitySchema(args[1], prefix="")
-        return EntitySchema(args[0], prefix=" ")
+        return UtteranceRule(rule, tuple(expansions))
 
     @v_args(inline=True)
     def macro_rule(self, macro_def, expansion) -> Macro:
@@ -145,10 +122,46 @@ def get_scfg_parser(start_symbol: str = "start") -> Lark:
     able to parse expansions outside of rules so that in our tests, we don't have to write
     lists of tokens.
     """
-    scfg_grammar_path = Path(__file__).parent / "scfg_grammar.cfg"
+    scfg_grammar_path = Path(__file__).parent / "scfg_grammar.lark"
     scfg_grammar: str
     with open(scfg_grammar_path, "r") as cf_grammar_file:
         scfg_grammar = cf_grammar_file.read()
 
     # Type ignoring because mypy doesn't play well with Lark.
     return Lark(scfg_grammar, ambiguity="explicit", start=start_symbol)  # type: ignore
+
+
+# RENDERING
+
+
+def render_token(token: SCFGToken) -> str:
+    if isinstance(token, EmptyToken):
+        return "#e"
+    elif isinstance(token, OptionableSCFGToken):
+        optional_str = "?" if token.optional else ""
+        value = token.lark_value if isinstance(token, RegexToken) else token.value
+        return value + optional_str
+    else:
+        assert isinstance(token, MacroToken)
+        return token.value
+
+
+def render_expansion(rhs: Expansion) -> str:
+    return " ".join(render_token(t) for t in rhs)
+
+
+def render_expansions(expansions: Tuple[Expansion, ...]):
+    return " | ".join(render_expansion(rhs) for rhs in expansions)
+
+
+def render_rule(rule: Union[Rule, Macro]) -> str:
+    if isinstance(rule, Macro):
+        arg_str = f"({', '.join(rule.args)})" if rule.args else ""
+        return f"{rule.name}{arg_str} 2> {render_expansion(rule.expansion)}"
+    elif isinstance(rule, PlanRule):
+        return f"{rule.lhs} 2> {render_expansion(rule.rhs)}"
+    elif isinstance(rule, UtteranceRule):
+        return f"{rule.lhs} 1> {render_expansions(rule.utterance_rhss)}"
+    else:
+        assert isinstance(rule, SyncRule)
+        return f"{rule.lhs} -> {render_expansions(rule.utterance_rhss)} , {render_expansion(rule.plan_rhs)}"

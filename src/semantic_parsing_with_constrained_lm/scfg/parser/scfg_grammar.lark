@@ -1,0 +1,52 @@
+%import common.WS
+%import common.WORD
+%import common.ESCAPED_STRING
+
+%ignore WS
+
+start: sync_rule
+    | mirrored_rule
+    | macro_rule
+    | utterance_rule
+
+start_for_test: sync_rule
+    | macro_rule
+    | utterance_rule
+    | plan_expansion
+
+sync_rule: rule "->" utterance_expansions "," plan_expansion
+mirrored_rule: rule "->" utterance_expansion
+macro_rule: macro_def "2>" plan_expansion
+utterance_rule: rule "1>" utterance_expansions
+
+utterance_expansions: utterance_expansion ("|" utterance_expansion)*
+
+plan_expansion: (token | macro_apply)+
+utterance_expansion: token+
+
+token: terminal
+    | optional_terminal
+    | nonterminal
+    | optional_nonterminal
+    | empty
+    | regex
+
+terminal: terminal_string
+optional_terminal: terminal_string "?"
+
+nonterminal: _name
+optional_nonterminal: _name "?"
+
+rule: _name
+
+macro_def: _name "(" (_name ("," _name)* ","?)? ")"
+    | _name
+macro_apply: _name "(" (_macro_arg ("," _macro_arg)* ","?)? ")"
+_macro_arg: nonterminal | terminal | macro_apply | empty
+
+_name: /[a-zA-Z][_a-zA-Z0-9]*/
+regex: /\/[^\/]+\//
+
+?terminal_string: ESCAPED_STRING
+
+empty: "#e"

@@ -8,12 +8,12 @@ import pytest
 import torch
 
 from semantic_parsing_with_constrained_lm.scfg.read_grammar import PreprocessedGrammar
-from semantic_parsing_with_constrained_lm.earley_partial_parse import (
+from semantic_parsing_with_constrained_lm.decoding.earley_partial_parse import (
     EarleyPartialParse,
     GrammarTokenizerInfo,
     UTF8EarleyPartialParse,
 )
-from semantic_parsing_with_constrained_lm.search import PartialParse
+from semantic_parsing_with_constrained_lm.decoding.partial_parse import PartialParse
 
 # This grammar can generate:
 #   abcA
@@ -24,11 +24,11 @@ SIMPLE_GRAMMAR = """
 start -> a, a
 start -> b, b
 start -> c, c
-a -> !"a" !"bcA", "abcA"
-a -> !"ab" !"cB", "abcB"
-b -> !"abc" !"C", "abcC"
-b -> c !"DE", "abcDE"
-c -> !"a" !"bc", "abc"
+a -> "a" "bcA" , "abcA"
+a -> "ab" "cB" , "abcB"
+b -> "abc" "C" , "abcC"
+b -> c "DE" , "abcDE"
+c -> "a" "bc" , "abc"
 """
 
 
@@ -44,11 +44,12 @@ def make_helpers(vocab: List[S]):
     token_to_id = {token: i for i, token in enumerate(vocab)}
 
     def compare(
-        partial_parse: PartialParse, expected_tokens: List[S], expected_can_end: bool,
+        partial_parse: PartialParse, expected_tokens: List[S], expected_can_end: bool
     ) -> None:
         tokens, can_end = partial_parse.allowed_next(
             torch.arange(len(vocab), dtype=torch.long)
         )
+        assert tokens is not None
         assert set(tokens.tolist()) == set(token_to_id[t] for t in expected_tokens)
         assert can_end == expected_can_end
 
@@ -78,7 +79,7 @@ parameterize_partial_parse_implementations = pytest.mark.parametrize(
             ),
         ),
     ],
-    ids=["EarleyPartialParse", "UTF8EarleyPartialParse",],
+    ids=["EarleyPartialParse", "UTF8EarleyPartialParse"],
 )
 
 
@@ -182,12 +183,12 @@ def test_simple_grammar_multi_char_vocab(
 
 EMOJI_GRAMMAR = """
 start -> cold monster, cold " " monster
-cold ->    !"\N{snowman}", "snowman"
-cold ->    !"\N{snowflake}", "snowflake"
-cold ->    !"\N{freezing face}", "freezing face"
-monster -> !"\N{ghost}", "ghost"
-monster -> !"\N{alien monster}", "alien monster"
-monster -> !"\N{biohazard sign}", "biohazard sign"
+cold ->    "\N{snowman}", "snowman"
+cold ->    "\N{snowflake}", "snowflake"
+cold ->    "\N{freezing face}", "freezing face"
+monster -> "\N{ghost}", "ghost"
+monster -> "\N{alien monster}", "alien monster"
+monster -> "\N{biohazard sign}", "biohazard sign"
 """
 # UTF-8 encoded:
 # snowman: b'\xe2\x98\x83'
@@ -203,7 +204,7 @@ def emoji_grammar() -> PreprocessedGrammar:
     return PreprocessedGrammar.from_line_iter(EMOJI_GRAMMAR.splitlines())
 
 
-def test_emoji_grammar_utf8(emoji_grammar: PreprocessedGrammar,) -> None:
+def test_emoji_grammar_utf8(emoji_grammar: PreprocessedGrammar) -> None:
 
     vocab = [
         "\N{snowman}".encode("utf-8"),
@@ -265,13 +266,13 @@ def test_emoji_grammar_utf8(emoji_grammar: PreprocessedGrammar,) -> None:
 
 REGEX_GRAMMAR = r"""
 start -> quoted, quoted
-start -> !"'''", "'''"
-start -> !"'aA'", "'aA'"
-start -> !"'aB'", "'aB'"
-start -> !"'aCD'", "'aCD'"
-quoted -> !"'" nonquoteplus !"'", "'" nonquoteplus "'"
-nonquoteplus -> !/[a-z]/ nonquotestar, /[^"]/ nonquotestar
-nonquotestar -> !/[a-z]/ nonquotestar, /[^"]/ nonquotestar
+start -> "'''", "'''"
+start -> "'aA'", "'aA'"
+start -> "'aB'", "'aB'"
+start -> "'aCD'", "'aCD'"
+quoted -> "'" nonquoteplus "'", "'" nonquoteplus "'"
+nonquoteplus -> /[a-z]/ nonquotestar, /[^"]/ nonquotestar
+nonquotestar -> /[a-z]/ nonquotestar, /[^"]/ nonquotestar
 nonquotestar -> #e, #e
 """
 
@@ -340,9 +341,9 @@ def test_regex_grammar_multi_char_vocab(
 
 EMOJI_REGEX_GRAMMAR = """
 start -> quoted, quoted
-quoted -> !"'" nonquoteplus !"'", "'" nonquoteplus "'"
-nonquoteplus -> !/[^'\N{snowman}]/ nonquotestar, /[^']/ nonquotestar
-nonquotestar -> !/[^'\N{snowman}]/ nonquotestar, /[^']/ nonquotestar
+quoted -> "'" nonquoteplus "'", "'" nonquoteplus "'"
+nonquoteplus -> /[^'\N{snowman}]/ nonquotestar, /[^']/ nonquotestar
+nonquotestar -> /[^'\N{snowman}]/ nonquotestar, /[^']/ nonquotestar
 nonquotestar -> #e, #e
 """
 
@@ -352,7 +353,7 @@ def emoji_regex_grammar() -> PreprocessedGrammar:
     return PreprocessedGrammar.from_line_iter(EMOJI_REGEX_GRAMMAR.splitlines())
 
 
-def test_emoji_regex_grammar(emoji_regex_grammar: PreprocessedGrammar,):
+def test_emoji_regex_grammar(emoji_regex_grammar: PreprocessedGrammar):
     vocab = [
         "\N{snowman}".encode("utf-8"),
         "\N{snowflake}".encode("utf-8"),
@@ -374,7 +375,7 @@ def test_emoji_regex_grammar(emoji_regex_grammar: PreprocessedGrammar,):
         b"\xf0\x9f\x91",
     ]
     initial = utf8_initial(
-        vocab, emoji_regex_grammar, "\N{snowman}\N{ghost}\N{alien monster}",
+        vocab, emoji_regex_grammar, "\N{snowman}\N{ghost}\N{alien monster}"
     )
     compare, append = make_helpers(vocab)
     # "'\N{snowman}" is missing because we banned \N{snowman} in the grammar

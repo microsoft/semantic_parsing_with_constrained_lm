@@ -214,9 +214,10 @@ async def map_async_limited(
             except StopIteration:
                 exhausted = True
                 break
-            task = asyncio.create_task(f(item))
-            tasks_to_items[task] = item
-            pending.add(task)
+            # pyright started freaking out here
+            t = asyncio.create_task(f(item))  # type: ignore
+            tasks_to_items[t] = item  # type: ignore
+            pending.add(t)  # type: ignore
 
     # Start off by scheduling the first `max_concurrency` tasks.
     fill_pending()
@@ -256,8 +257,8 @@ class TimeoutBarrier:
     # Called once when the barrier is released. The return value is ignored.
     callback: Callable[[], Any] = lambda: None
 
-    _event: asyncio.Event = dataclasses.field(init=False, default=None)
-    _release_lock: asyncio.Lock = dataclasses.field(init=False, default=None)
+    _event: Optional[asyncio.Event] = dataclasses.field(init=False, default=None)
+    _release_lock: Optional[asyncio.Lock] = dataclasses.field(init=False, default=None)
     _count: int = dataclasses.field(init=False, default=0)
     _deadline_release: Optional[asyncio.Task] = dataclasses.field(
         init=False, default=None
@@ -280,6 +281,7 @@ class TimeoutBarrier:
         self._setup()
 
         # If we're in the middle of releasing the barrier, wait until that's finished
+        assert self._release_lock is not None
         async with self._release_lock:
             pass
 
@@ -293,12 +295,16 @@ class TimeoutBarrier:
             self._decrement()
             return
 
+        assert self._event is not None
         await self._event.wait()
         self._check_for_exception_in_deadline()
         self._decrement()
 
     async def wait(self):
         """Wait for the barrier to release, but don't count towards `parties` or `max_wait`."""
+
+        assert self._event is not None
+        assert self._release_lock is not None
 
         # If we're in the middle of releasing the barrier, wait until that's finished
         async with self._release_lock:
@@ -330,6 +336,7 @@ class TimeoutBarrier:
         return False
 
     async def _release(self, timeout: bool):
+        assert self._release_lock is not None
         await self._release_lock.acquire()
         try:
             callback_result = self.callback()  # type: ignore[misc]
@@ -338,31 +345,33 @@ class TimeoutBarrier:
                 await callback_result
         finally:
             # If we don't do this, we'll have deadlock
+            assert self._event is not None
             self._event.set()
             if not timeout and self._deadline_release:
                 self._deadline_release.cancel()
                 self._deadline_release = None
 
     def _check_for_exception_in_deadline(self):
-        if (
-            self._deadline_release
-            and self._deadline_release.done()
-            and self._deadline_release.exception()
-        ):
+        if self._deadline_release and self._deadline_release.done():
+            exc = self._deadline_release.exception()
+            if exc is None:
+                return
             # The timeout expired for the parties to arrive, so we called `callback` and set `self._event`.
             # However, `callback` threw an exception, so propagate it further here.
             # Also, clear `self._deadline_release` so that only one waiter will get the exception.
             # This is consistent with the behavior when the barrier is released due to enough parties arriving.
-            exc = self._deadline_release.exception()
             self._deadline_release = None
             raise exc
 
     def _decrement(self):
         self._count -= 1
         if self._count == 0:
+            assert self._event is not None
+            assert self._release_lock is not None
             self._event.clear()
             self._release_lock.release()
 
     @property
     def currently_releasing(self):
+        assert self._release_lock is not None
         return self._release_lock.locked()

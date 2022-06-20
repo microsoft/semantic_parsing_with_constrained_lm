@@ -23,14 +23,17 @@ It will generate the following experiments (depending on the value of eval_split
 	- GPT-2 Unconstrained Canonical
 	- GPT-2 Unconstrained Meaning
 """
+from pathlib import Path
+from typing import Any, Callable, Dict, cast
 
-from typing import Any, Callable, Dict
-
-import torch
 from typing_extensions import Literal
 
 from semantic_parsing_with_constrained_lm.configs.lib.common import PromptOrder, make_semantic_parser
 from semantic_parsing_with_constrained_lm.datum import Datum
+from semantic_parsing_with_constrained_lm.decoding.partial_parse import (
+    PartialParse,
+    StartsWithSpacePartialParse,
+)
 from semantic_parsing_with_constrained_lm.domains.qdmr_break import (
     BreakDataType,
     BreakDatum,
@@ -43,7 +46,7 @@ from semantic_parsing_with_constrained_lm.lm import TRAINED_MODEL_DIR, Autoregre
 from semantic_parsing_with_constrained_lm.lm_bart import Seq2SeqBart
 from semantic_parsing_with_constrained_lm.lm_openai_gpt3 import IncrementalOpenAIGPT3
 from semantic_parsing_with_constrained_lm.run_exp import EvalSplit, Experiment
-from semantic_parsing_with_constrained_lm.search import PartialParse, StartsWithSpacePartialParse
+from semantic_parsing_with_constrained_lm.train_model_setup import BartModelConfig
 
 
 def build_config(
@@ -71,10 +74,16 @@ def build_config(
         if model == ClientType.GPT3:
             lm = IncrementalOpenAIGPT3()
         elif model == ClientType.BART:
+            model_loc = f"{TRAINED_MODEL_DIR}/break_{output_type}/checkpoint-10000/"
+            bart_model_config = BartModelConfig(
+                model_id="Bart", model_loc=Path(model_loc)
+            )
+            bart_model, clamp_tokenizer, _ = bart_model_config.setup_model()
             lm = Seq2SeqBart(
-                # Part after / is set to match lm_finetune.py
-                f"{TRAINED_MODEL_DIR}/20000/break_{output_type}/",
-                device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
+                # Model location set to match lm_finetune.py
+                pretrained_model_dir=model_loc,
+                model=bart_model,
+                clamp_tokenizer=clamp_tokenizer,
             )
         else:
             raise ValueError(model)
@@ -156,7 +165,10 @@ def build_config(
 
         parser = make_semantic_parser(
             train_data,
-            lm,
+            # Erase type of `lm` since we're not passing any other arguments
+            # that have the HS type variable.
+            # TODO: Think if there's a better way to do this
+            cast(AutoregressiveModel[Any], lm),
             use_gpt3,
             MAX_STEPS_FOR_COMPLETION,
             beam_size,

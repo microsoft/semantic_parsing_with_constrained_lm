@@ -2,13 +2,14 @@
 # Licensed under the MIT License.
 
 from collections import defaultdict
+from pathlib import Path
 from typing import DefaultDict, Dict, Iterable, List, Tuple
 
 from cached_property import cached_property
 from lark import Lark
 
 from semantic_parsing_with_constrained_lm.scfg.char_grammar import CharGrammar
-from semantic_parsing_with_constrained_lm.scfg.parser.token import EntitySchema, NonterminalToken
+from semantic_parsing_with_constrained_lm.scfg.parser.token import NonterminalToken
 from semantic_parsing_with_constrained_lm.scfg.parser.types import Alias, Expansion, Nonterminal
 from semantic_parsing_with_constrained_lm.scfg.read_grammar import PreprocessedGrammar
 
@@ -51,8 +52,6 @@ class SCFG:
 
     self.utterance_alias_to_plan_alias: Dict[Alias, List[Alias]] = {}
     self.plan_alias_to_utterance_alias: Dict[Alias, List[Alias]] = {}
-
-    self.schema_annotations: Dict[Nonterminal, str] = preprocessed_grammar.schema_annotations
     """
 
     def __init__(
@@ -126,15 +125,6 @@ class SCFG:
             Nonterminal, List[Alias]
         ] = defaultdict(list)
 
-        ###
-        # These store the names of schemas that must be output by a nonterminal. For example, the rule
-        # number: Number -> "1", "1" means that the nonterminal Number must output a value
-        # of type Number.
-        ##
-        self.schema_annotations: Dict[
-            Nonterminal, EntitySchema
-        ] = preprocessed_grammar.schema_annotations
-
         def add_utterance_rule(
             rule_nonterminal: Nonterminal, utterance_right_hand_side: Expansion
         ):
@@ -187,10 +177,11 @@ class SCFG:
 
         sync_rules = preprocessed_grammar.sync_rules
         utterance_rules = preprocessed_grammar.utterance_rules
-        for (rule_nt, plan_rhs), utterance_rhss in sync_rules.items():
+        # sorted to make deterministic and easier to test
+        for (rule_nt, plan_rhs), utterance_rhss in sorted(sync_rules.items(), key=str):
             utterance_aliases = [
                 add_utterance_rule(rule_nt, utterance_rhs)
-                for utterance_rhs in utterance_rhss
+                for utterance_rhs in sorted(utterance_rhss, key=str)
             ]
             pa = add_plan_rule(rule_nt, plan_rhs, utterance_aliases)
 
@@ -199,7 +190,7 @@ class SCFG:
                 self.utterance_alias_to_plan_alias[ua] = [pa]
 
         for rule_nt, utterance_rhss in utterance_rules.items():
-            for utterance_rhs in utterance_rhss:
+            for utterance_rhs in sorted(utterance_rhss, key=str):
                 add_utterance_rule(rule_nt, utterance_rhs)
 
     @cached_property
@@ -209,7 +200,7 @@ class SCFG:
         `utterance_earley`.
         """
         return construct_lark_parser(
-            self.utterance_grammar, is_plan=False, start=self.start,
+            self.utterance_grammar, is_plan=False, start=self.start
         )
 
     @cached_property
@@ -236,6 +227,10 @@ class SCFG:
     @staticmethod
     def from_folder(folder_path: str) -> "SCFG":
         return SCFG(PreprocessedGrammar.from_folder(folder_path))
+
+    @staticmethod
+    def from_path(folder_path: Path) -> "SCFG":
+        return SCFG.from_folder(str(folder_path))
 
 
 class LarkParserAndGrammar:

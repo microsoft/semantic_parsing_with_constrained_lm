@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "Tools and instructions for reproducing the experiments in the paper Constrained Language Models Yield Few-Shot Semantic Parsers (EMNLP 2021)."
 authors = ["Microsoft Semantic Machines <sminfo@microsoft.com>"]
 
+[[tool.poetry.source]]
+name = "smpypi"
+url = "https://smpypi.z5.web.core.windows.net/"
+
 [tool.poetry.dependencies]
 python = "^3.7"
 matplotlib = "^3.1.0"
@@ -21,6 +25,11 @@ datasets = "1.1.3"
 appdirs = "^1.4.4"
 sm-dataflow = {git = "https://github.com/microsoft/task_oriented_dialogue_as_dataflow_synthesis.git"}
 blobfile = "^1.2.5"
+sentencepiece = "^0.1.96"
+protobuf = "^4.21.1"
+openfst-python = "^1.8.2"
+Whoosh = "^2.7.4"
+rapidfuzz = "^2.0.11"
 
 [tool.poetry.dev-dependencies]
 pytest = "^4.3.1"

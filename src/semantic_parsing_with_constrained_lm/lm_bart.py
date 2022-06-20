@@ -4,14 +4,16 @@
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple, cast
+from typing import Any, List, Optional, Sequence, Tuple, cast
 
 import torch
+import torch.nn.functional as F
 from cached_property import cached_property
-from transformers import BartForConditionalGeneration, BartTokenizer, GPT2Tokenizer
+from transformers import PreTrainedModel
 
 from semantic_parsing_with_constrained_lm.async_tools.batch_helper import BatchingHelper, BatchMaker
 from semantic_parsing_with_constrained_lm.lm import Seq2SeqHelper, Seq2SeqModel
+from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
 
 @dataclass
@@ -29,6 +31,8 @@ class BartState:
         Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], ...
     ] = dataclasses.field(repr=False)
 
+    last_logprobs: torch.Tensor = dataclasses.field(repr=False)
+
 
 @dataclass(eq=True, frozen=True)
 class BartBatchMaker(BatchMaker):
@@ -36,12 +40,12 @@ class BartBatchMaker(BatchMaker):
     output_length: int
     uses_hidden_state: bool
 
-    model: BartForConditionalGeneration = dataclasses.field(compare=False)
+    model: PreTrainedModel = dataclasses.field(compare=False)
 
     @property
     def max_batch_size(self) -> int:
         # TODO: Revisit this entirely arbitrary number
-        return 10
+        return 1
 
     @property
     def timeout(self) -> float:
@@ -50,7 +54,7 @@ class BartBatchMaker(BatchMaker):
     @classmethod
     def from_args(
         cls,
-        model: BartForConditionalGeneration,
+        model: PreTrainedModel,
         args: Tuple[Sequence[int], Sequence[int], Optional[BartState]],
     ):
         encoder_tokens, decoder_tokens, hidden_state = args
@@ -81,18 +85,24 @@ class BartBatchMaker(BatchMaker):
     async def _execute_without_hidden_state(
         self, args: List[Tuple[Sequence[int], Sequence[int], Optional[BartState]]]
     ) -> Tuple[torch.Tensor, List[BartState]]:
-        encoder_tokens, decoder_tokens, _ = zip(*args)
+        encoder_tokens, decoder_tokens, _ = cast(
+            Tuple[
+                Sequence[Sequence[int]],
+                Sequence[Sequence[int]],
+                Sequence[Optional[BartState]],
+            ],
+            zip(*args),
+        )
         input_ids = torch.tensor(
             list(encoder_tokens), dtype=torch.long, device=self.model.device
         )
         decoder_input_ids = torch.tensor(
             list(decoder_tokens), dtype=torch.long, device=self.model.device
         )
-
         model_outputs = self.model(
             input_ids=input_ids, decoder_input_ids=decoder_input_ids
         )
-        logprobs = torch.nn.functional.log_softmax(model_outputs["logits"], dim=-1)
+        logprobs = F.log_softmax(model_outputs["logits"], dim=-1)
 
         next_hidden_states = [
             BartState(
@@ -109,6 +119,7 @@ class BartBatchMaker(BatchMaker):
                     )
                     for past_key_values_for_layer in model_outputs["past_key_values"]
                 ),
+                logprobs[i, -1],
             )
             for i in range(len(args))
         ]
@@ -117,8 +128,14 @@ class BartBatchMaker(BatchMaker):
     async def _execute_with_hidden_state(
         self, args: List[Tuple[Sequence[int], Sequence[int], Optional[BartState]]]
     ):
-        _, decoder_tokens, hidden_states = zip(*args)
-        decoder_input_ids = torch.tensor(
+        _, decoder_tokens, hidden_states = cast(
+            Tuple[Any, Sequence[Sequence[int]], Sequence[Optional[BartState]]],
+            zip(*args),
+        )
+        assert not any(hs is None for hs in hidden_states)
+        hidden_states = cast(Sequence[BartState], hidden_states)
+
+        decoder_input_ids = torch.tensor(  # type: ignore
             list(decoder_tokens), dtype=torch.long, device=self.model.device
         )
         encoder_outputs = torch.stack(
@@ -143,12 +160,12 @@ class BartBatchMaker(BatchMaker):
             encoder_outputs=(encoder_outputs,),
             past_key_values=past_key_values,
         )
-        logprobs = torch.nn.functional.log_softmax(model_outputs["logits"], dim=-1)
+        logprobs = F.log_softmax(model_outputs["logits"], dim=-1)
 
         next_hidden_states = [
             BartState(
                 past_hidden_state.encoder_tokens,
-                past_hidden_state.decoder_tokens + decoder_tokens,
+                past_hidden_state.decoder_tokens + tuple(decoder_tokens[i]),
                 model_outputs["encoder_last_hidden_state"][i],
                 tuple(
                     cast(
@@ -160,6 +177,7 @@ class BartBatchMaker(BatchMaker):
                     )
                     for past_key_values_for_layer in model_outputs["past_key_values"]
                 ),
+                logprobs[i, -1],
             )
             for i, past_hidden_state in enumerate(hidden_states)
         ]
@@ -169,20 +187,18 @@ class BartBatchMaker(BatchMaker):
 @dataclass
 class Seq2SeqBart(Seq2SeqModel[BartState]):
     pretrained_model_dir: str
-    device: torch.device
+    # We tested `model` with Bart and T5. We expect it to work with all PretrainedModel instances with GenerationMixin.
+    # But its possible some model won't work out of the box.
+    model: PreTrainedModel
+    clamp_tokenizer: ClampTokenizer
 
     batch_helper: BatchingHelper[
         Tuple[Sequence[int], Sequence[int], Optional[BartState]],
         Tuple[torch.Tensor, List[BartState]],
     ] = dataclasses.field(init=False)
-    model: BartForConditionalGeneration = dataclasses.field(init=False)
     seq2seq_helper: Seq2SeqHelper = dataclasses.field(init=False)
 
     def __post_init__(self):
-        self.model = BartForConditionalGeneration.from_pretrained(
-            self.pretrained_model_dir
-        )
-        self.model.to(self.device)
         self.batch_helper = BatchingHelper(
             lambda args: BartBatchMaker.from_args(self.model, args),
         )
@@ -195,12 +211,12 @@ class Seq2SeqBart(Seq2SeqModel[BartState]):
             )
 
     @cached_property
-    def tokenizer(self) -> GPT2Tokenizer:  # pylint: disable=invalid-overridden-method
-        return BartTokenizer.from_pretrained(self.pretrained_model_dir)
-
-    @cached_property
     def vocab_size(self) -> int:  # pylint: disable=invalid-overridden-method
         return self.tokenizer.vocab_size
+
+    @cached_property
+    def tokenizer(self) -> ClampTokenizer:  # pylint: disable=invalid-overridden-method
+        return self.clamp_tokenizer
 
     @property
     def decoder_bos_ids(self) -> List[int]:
@@ -248,3 +264,6 @@ class Seq2SeqBart(Seq2SeqModel[BartState]):
             batched_logprobs[i, : len(tokens)],
             None if drop_next_hidden_state else next_hidden_states[i],
         )
+
+    async def next_logprobs(self, hidden_state: BartState) -> torch.Tensor:
+        return hidden_state.last_logprobs

@@ -11,6 +11,7 @@ import torch
 from transformers import GPT2Config, GPT2LMHeadModel, GPT2Tokenizer
 
 from semantic_parsing_with_constrained_lm.lm_gpt2 import IncrementalGPT2, Seq2SeqGPT2
+from semantic_parsing_with_constrained_lm.tokenization import GPT2ClampTokenizer
 
 
 @pytest.fixture(scope="module")
@@ -28,7 +29,9 @@ def tiny_gpt2_path(tmpdir_factory) -> str:
 
 
 def test_incremental_batching(tiny_gpt2_path: str) -> None:
-    lm = IncrementalGPT2(tiny_gpt2_path, torch.device("cpu"))
+    tokenizer = GPT2ClampTokenizer.from_pretrained(tiny_gpt2_path)
+    tiny_gpt2_model = GPT2LMHeadModel.from_pretrained(tiny_gpt2_path)
+    lm = IncrementalGPT2(tiny_gpt2_path, tiny_gpt2_model, tokenizer)
 
     async def inner():
         first, _ = await lm.execute([0, 1, 2])
@@ -43,7 +46,9 @@ def test_incremental_batching(tiny_gpt2_path: str) -> None:
 
 
 def test_incremental_hidden_state(tiny_gpt2_path: str) -> None:
-    lm = IncrementalGPT2(tiny_gpt2_path, torch.device("cpu"))
+    tokenizer = GPT2ClampTokenizer.from_pretrained(tiny_gpt2_path)
+    tiny_gpt2_model = GPT2LMHeadModel.from_pretrained(tiny_gpt2_path)
+    lm = IncrementalGPT2(tiny_gpt2_path, tiny_gpt2_model, tokenizer)
 
     async def inner():
         first, hs0 = await lm.execute([0])
@@ -61,21 +66,34 @@ def test_seq2seq(tiny_gpt2_path: str) -> None:
     with open(os.path.join(tiny_gpt2_path, "seq2seq_settings.json"), "w") as f:
         json.dump(
             {
-                "input_surround": {"bos": "Human: ", "eos": "\n",},
-                "output_surround": {"bos": "Computer: ", "eos": "\n",},
+                "input_surround": {
+                    "bos": [20490, 25],
+                    "eos": [198],
+                    "starts_with_space": True,
+                },
+                "output_surround": {
+                    "bos": [34556, 25],
+                    "eos": [198],
+                    "starts_with_space": True,
+                },
+                "decoder_start_token_id": None,
             },
             f,
         )
-    model = Seq2SeqGPT2(tiny_gpt2_path, torch.device("cpu"))
+    tokenizer = GPT2ClampTokenizer.from_pretrained(tiny_gpt2_path)
+    tiny_gpt2_model = GPT2LMHeadModel.from_pretrained(tiny_gpt2_path)
+    model = Seq2SeqGPT2(tiny_gpt2_path, tiny_gpt2_model, tokenizer)
 
     async def inner():
         seq2seq_logprobs, seq2seq_hs = await model.initial(
-            model.encode_for_encoder("human"), model.decoder_bos_ids,
+            model.encode_for_encoder("human"), model.decoder_bos_ids
         )
+        assert seq2seq_hs is not None
 
         lm_logprobs, lm_hs = await model.incremental_model.execute(
-            model.tokenizer.encode("Human: human\nComputer:", add_special_tokens=False)
+            model.tokenizer.encode("Human: human\nComputer:")
         )
+        assert lm_hs is not None
         assert torch.allclose(seq2seq_logprobs, lm_logprobs[-2:])
 
         seq2seq_logprobs, _ = await model.extend([10], seq2seq_hs)
