@@ -46,22 +46,10 @@ export TRAINED_MODEL_DIR=trained_models/
 
 for domain in "basketball" "blocks" "calendar" "housing" "publications" "recipes" "restaurants" "socialnetwork"; do
     python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
-          --exp-names overnight_${domain}_utterance \
-          --lr 1e-6 \
-          --num-steps 20000 \
-          --steps-per-save 20000 \
-          --model-type BartV3 \
-          --steps-per-decay 8 \
-          --batch-size 32
+          --exp-names overnight_${domain}_utterance
 
     python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
-          --exp-names overnight_${domain}_meaningRepresentation \
-          --lr 1e-5 \
-          --num-steps 20000 \
-          --steps-per-save 20000 \
-          --model-type BartV3 \
-          --steps-per-decay 8 \
-          --batch-size 32
+          --exp-names overnight_${domain}_meaningRepresentation
 done 
 ```
 
@@ -162,22 +150,10 @@ export PRETRAINED_MODEL_DIR=facebook/bart-large
 export TRAINED_MODEL_DIR=trained_models/
 
 python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
-      --exp-names break_nested \
-      --lr 1e-6 \
-      --num-steps 20000 \
-      --steps-per-save 20000 \
-      --model-type BartV3 \
-      --steps-per-decay 6 \
-      --batch-size 32
+      --exp-names break_nested
 
 python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
-      --exp-names break_QDMR \
-      --lr 1e-5 \
-      --num-steps 20000 \
-      --steps-per-save 20000 \
-      --model-type BartV3 \
-      --steps-per-decay 2 \
-      --batch-size 32
+      --exp-names break_QDMR
 ```
 
 ### Table 3
@@ -262,22 +238,10 @@ export PRETRAINED_MODEL_DIR=facebook/bart-large
 export TRAINED_MODEL_DIR=trained_models/
 
 python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
-      --exp-names calflow_canonicalUtterance \
-      --lr 1e-5 \
-      --num-steps 20000 \
-      --steps-per-save 20000 \
-      --model-type BartV3 \
-      --steps-per-decay 2 \
-      --batch-size 32
+      --exp-names calflow_canonicalUtterance
 
 python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
-      --exp-names calflow_lispress \
-      --lr 1e-5 \
-      --num-steps 20000 \
-      --steps-per-save 20000 \
-      --model-type BartV3 \
-      --steps-per-decay 2 \
-      --batch-size 32
+      --exp-names calflow_lispress
 ```
 
 ### Table 4
