@@ -7,7 +7,7 @@ parsing datasets, with splits of different data sizes, as well as grammars which
 used to constrain decoding of semantic parses.
 
 ### BenchClamp Datasets
-The current benchmark supports 4 datasets: 
+The current benchmark supports 6 datasets:
 1. CalFlowV2
 2. TreeDST (in LispressV2 format)
 3. MTOP (all languages)
@@ -22,7 +22,7 @@ split (`all`).
 
 ### Fine-tune a Language Model
 1. You can edit `benchclamp_config.py` to add your LM to the `TRAIN_MODEL_CONFIGS` 
-list. In the committed file, we have only a T5-base model
+list. We have already added some popular LMs to the list.
     ```
     TRAIN_MODEL_CONFIGS: List[ClampModelConfig] = [
         T5ModelConfig(

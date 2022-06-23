@@ -46,9 +46,11 @@ export TRAINED_MODEL_DIR=trained_models/
 
 for domain in "basketball" "blocks" "calendar" "housing" "publications" "recipes" "restaurants" "socialnetwork"; do
     python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
+          --config-name semantic_parsing_with_constrained_lm.finetune.configs.emnlp_train_config \
           --exp-names overnight_${domain}_utterance
 
     python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
+          --config-name semantic_parsing_with_constrained_lm.finetune.configs.emnlp_train_config \
           --exp-names overnight_${domain}_meaningRepresentation
 done 
 ```
@@ -150,9 +152,11 @@ export PRETRAINED_MODEL_DIR=facebook/bart-large
 export TRAINED_MODEL_DIR=trained_models/
 
 python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
+      --config-name semantic_parsing_with_constrained_lm.finetune.configs.emnlp_train_config \
       --exp-names break_nested
 
 python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
+      --config-name semantic_parsing_with_constrained_lm.finetune.configs.emnlp_train_config \
       --exp-names break_QDMR
 ```
 
@@ -238,9 +242,11 @@ export PRETRAINED_MODEL_DIR=facebook/bart-large
 export TRAINED_MODEL_DIR=trained_models/
 
 python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
+      --config-name semantic_parsing_with_constrained_lm.finetune.configs.emnlp_train_config \
       --exp-names calflow_canonicalUtterance
 
 python -m semantic_parsing_with_constrained_lm.finetune.lm_finetune \
+      --config-name semantic_parsing_with_constrained_lm.finetune.configs.emnlp_train_config \
       --exp-names calflow_lispress
 ```
 

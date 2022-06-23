@@ -11,7 +11,7 @@ url = "https://smpypi.z5.web.core.windows.net/"
 [tool.poetry.dependencies]
 python = "^3.7"
 matplotlib = "^3.1.0"
-torch = "1.6.0"
+torch = "1.10.2"
 pydantic = "^1.4"
 lark-parser = "^0.8.2"
 requests = "^2.20.1"
