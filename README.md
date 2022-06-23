@@ -18,8 +18,16 @@ following papers:
     }
     ```
 
-2. [**BenchCLAMP**](#)
+2. [**BenchCLAMP: A Benchmark for Evaluating Language Models on Semantic Parsing**](https://arxiv.org/abs/2206.10668)
     ```bib
+    @misc{BenchCLAMP2022,
+        doi = {10.48550/ARXIV.2206.10668},
+        url = {https://arxiv.org/abs/2206.10668},
+        author = {Roy, Subhro and Thomson, Sam and Chen, Tongfei and Shin, Richard and Pauls, Adam and Eisner, Jason and Van Durme, Benjamin},
+        title = {BenchCLAMP: A Benchmark for Evaluating Language Models on Semantic Parsing},
+        publisher = {arXiv},
+        year = {2022},
+    }
     ```
 
 If you use any source code or data included in this toolkit in your work, please cite the relevant paper.
