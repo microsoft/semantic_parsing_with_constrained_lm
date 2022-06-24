@@ -2,70 +2,71 @@
 # Licensed under the MIT License.
 
 import pytest
+from lark import Lark
 
 from semantic_parsing_with_constrained_lm.scfg.parser.parse import get_scfg_parser
+from semantic_parsing_with_constrained_lm.scfg.parser.rule import MAYBE_PREFIX as PFX
 from semantic_parsing_with_constrained_lm.scfg.parser.rule import (
-    Diff,
-    all_possible_options,
-    modify_expansion,
+    PlanRule,
+    SyncRule,
+    UtteranceRule,
+    expand_optionals,
 )
-from semantic_parsing_with_constrained_lm.scfg.parser.token import NonterminalToken, TerminalToken
+from semantic_parsing_with_constrained_lm.scfg.parser.token import (
+    EmptyToken,
+    NonterminalToken,
+    TerminalToken,
+)
 from semantic_parsing_with_constrained_lm.scfg.read_grammar import parse_string
 
 
 @pytest.fixture(scope="module", name="parser")
-def create_parser():
+def create_parser() -> Lark:
     return get_scfg_parser("start_for_test")
 
 
-def test_all_possible_options(parser):
-
-    assert all_possible_options(
-        parse_string(parser, 'yes? "the"? choice "one"')
-        == [
-            (
-                parse_string(parser, 'yes "the" choice "one"'),
-                Diff(
-                    included=[
-                        TerminalToken("the", optional=True),
-                        NonterminalToken("yes", optional=True),
-                    ],
-                    excluded=[],
-                ),
-            ),
-            (
-                parse_string(parser, 'yes choice "one"'),
-                Diff(
-                    included=[NonterminalToken("yes", optional=True)],
-                    excluded=[TerminalToken("the", optional=True)],
-                ),
-            ),
-            (
-                parse_string(parser, '"the" choice "one"'),
-                Diff(
-                    included=[TerminalToken("the", optional=True)],
-                    excluded=[NonterminalToken("yes", optional=True)],
-                ),
-            ),
-            (
-                parse_string(parser, 'choice "one"'),
-                Diff(
-                    included=[],
-                    excluded=[
-                        TerminalToken("the", optional=True),
-                        NonterminalToken("yes", optional=True),
-                    ],
-                ),
-            ),
-        ]
+def test_optional_symbols(parser: Lark):
+    orig_rule = parse_string(
+        parser, 'start -> yes? "the"? choice "one" , "blah" choice yes? no?'
     )
-
-
-def test_modify_expansion(parser):
-    assert modify_expansion(
-        parse_string(parser, '"hi" x? "my name is" y? z?'),
-        Diff(
-            [NonterminalToken("x", optional=True)],
-            [NonterminalToken("z", optional=True)],
+    expected = {
+        SyncRule(
+            lhs="start",
+            utterance_rhss=(
+                (
+                    NonterminalToken(f"{PFX}_nt_yes", optional=False),
+                    NonterminalToken(f"{PFX}_t_the", optional=False),
+                    NonterminalToken("choice", optional=False),
+                    TerminalToken('"one"', optional=False),
+                ),
+            ),
+            plan_rhs=(
+                TerminalToken('"blah"', optional=False),
+                NonterminalToken("choice", optional=False),
+                NonterminalToken(f"{PFX}_nt_yes", optional=False),
+                NonterminalToken(f"{PFX}_nt_no", optional=False),
+            ),
         ),
-    ) == tuple(parse_string(parser, '"hi" x "my name is" y?'))
+        # yes appears on both sides
+        SyncRule(
+            lhs=f"{PFX}_nt_yes",
+            utterance_rhss=((NonterminalToken("yes", optional=False),),),
+            plan_rhs=(NonterminalToken("yes", optional=False),),
+        ),
+        SyncRule(
+            lhs=f"{PFX}_nt_yes",
+            utterance_rhss=((EmptyToken(),),),
+            plan_rhs=(EmptyToken(),),
+        ),
+        # "the" only appears on the utterance side
+        UtteranceRule(
+            lhs=f"{PFX}_t_the",
+            utterance_rhss=((TerminalToken('"the"', optional=False),),),
+        ),
+        UtteranceRule(lhs=f"{PFX}_t_the", utterance_rhss=((EmptyToken(),),)),
+        # no only appears on the plan side
+        PlanRule(lhs=f"{PFX}_nt_no", rhs=(NonterminalToken("no", optional=False),)),
+        PlanRule(lhs=f"{PFX}_nt_no", rhs=(EmptyToken(),)),
+    }
+    new_rules = expand_optionals(orig_rule)
+    assert new_rules == expected

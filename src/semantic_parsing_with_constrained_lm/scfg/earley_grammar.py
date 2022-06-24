@@ -1,9 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from typing import Dict, List, Tuple, Union
+# This file is deprecated.
+# TODO: Replace with Grammar[np.uint8] and UInt8EarleyPartialParse.
+from typing import Any, Dict, List, Tuple, Union
 
-from semantic_parsing_with_constrained_lm.earley.grammar import DottedRule, Grammar, Nonterm, Symbol
+from semantic_parsing_with_constrained_lm.earley.grammar import FixedGrammar, LinearDottedRule, Nonterm, Symbol
 from semantic_parsing_with_constrained_lm.scfg.char_grammar import START
 from semantic_parsing_with_constrained_lm.scfg.parser.token import (
     EmptyToken,
@@ -17,7 +19,7 @@ from semantic_parsing_with_constrained_lm.scfg.read_grammar import GrammarRules
 CFTerminal = Union[str, RegexToken]
 
 
-class EarleyCFGrammar(Grammar[CFTerminal]):
+class EarleyCFGrammar(FixedGrammar[CFTerminal, Any]):
     """A grammar for one of the two sides of an SCFG.
 
     Similar to CharGrammar, but it doesn't split up all terminals into single
@@ -53,10 +55,13 @@ class EarleyCFGrammar(Grammar[CFTerminal]):
         return EarleyCFGrammar(
             root=START,
             expansions={
-                Nonterm(origin): [
-                    DottedRule.from_rule(Nonterm(origin), rhs=convert(rhs), alias=alias)
+                Nonterm(origin): {
+                    # https://github.com/microsoft/pyright/issues/2962
+                    LinearDottedRule[CFTerminal].from_rule(
+                        Nonterm(origin), rhs=convert(rhs), alias=alias
+                    )
                     for rhs, alias in rhss
-                ]
+                }
                 for origin, rhss in sorted(grammar.items())
             },
         )

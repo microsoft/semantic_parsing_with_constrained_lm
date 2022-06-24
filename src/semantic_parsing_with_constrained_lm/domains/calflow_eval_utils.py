@@ -3,9 +3,9 @@
 
 """ Functions to help run Bart cold monster model for Calflow. """
 import asyncio
-from typing import List, Optional
+from pathlib import Path
+from typing import List
 
-import torch
 import tqdm
 
 from semantic_parsing_with_constrained_lm.scfg.read_grammar import PreprocessedGrammar
@@ -15,15 +15,17 @@ from semantic_parsing_with_constrained_lm.domains.calflow import CalflowOutputLa
 from semantic_parsing_with_constrained_lm.lm import ClientType
 from semantic_parsing_with_constrained_lm.lm_bart import Seq2SeqBart
 from semantic_parsing_with_constrained_lm.model import BeamSearchSemanticParser, ModelResult
+from semantic_parsing_with_constrained_lm.train_model_setup import BartModelConfig
 
 
 def instantiate_bart_eval_model(
-    model_loc: str, grammar_dir: Optional[str] = None,
+    model_loc: str, grammar_dir: str
 ) -> BeamSearchSemanticParser:
     preprocessed_grammar = PreprocessedGrammar.from_folder(grammar_dir)
+    bart_model_config = BartModelConfig(model_id="Bart", model_loc=Path(model_loc))
+    model, tokenizer, _ = bart_model_config.setup_model()
     lm = Seq2SeqBart(
-        model_loc,
-        device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
+        pretrained_model_dir=model_loc, model=model, clamp_tokenizer=tokenizer
     )
     beam_size = 2
     return make_semantic_parser_for_calflow(

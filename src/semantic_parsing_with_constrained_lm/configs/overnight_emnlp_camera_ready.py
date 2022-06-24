@@ -1,13 +1,17 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from typing import Callable, Dict, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, Tuple, cast
 
-import torch
 from typing_extensions import Literal
 
 from semantic_parsing_with_constrained_lm.configs.lib.common import make_semantic_parser
 from semantic_parsing_with_constrained_lm.datum import Datum
+from semantic_parsing_with_constrained_lm.decoding.partial_parse import (
+    PartialParse,
+    StartsWithSpacePartialParse,
+)
 from semantic_parsing_with_constrained_lm.domains.overnight import OutputType, OvernightPieces
 from semantic_parsing_with_constrained_lm.eval import TopKExactMatch
 from semantic_parsing_with_constrained_lm.lm import TRAINED_MODEL_DIR, AutoregressiveModel, ClientType
@@ -15,10 +19,10 @@ from semantic_parsing_with_constrained_lm.lm_bart import Seq2SeqBart
 from semantic_parsing_with_constrained_lm.lm_openai_gpt3 import IncrementalOpenAIGPT3
 from semantic_parsing_with_constrained_lm.paths import DOMAINS_DIR
 from semantic_parsing_with_constrained_lm.run_exp import EvalSplit, Experiment
-from semantic_parsing_with_constrained_lm.search import PartialParse, StartsWithSpacePartialParse
+from semantic_parsing_with_constrained_lm.train_model_setup import BartModelConfig
 
 
-def build_config(_log_dir, **_kwargs,) -> Dict[str, Callable[[], Experiment]]:
+def build_config(_log_dir, **_kwargs) -> Dict[str, Callable[[], Experiment]]:
     BEAM_SIZE = 10
 
     eval_split = _kwargs["eval_split"]
@@ -37,12 +41,20 @@ def build_config(_log_dir, **_kwargs,) -> Dict[str, Callable[[], Experiment]]:
         train_size: int,
     ):
         lm: AutoregressiveModel
+
         if model == ClientType.GPT3:
             lm = IncrementalOpenAIGPT3()
         elif model == ClientType.BART:
+            model_loc = f"{TRAINED_MODEL_DIR}/overnight_{domain}_{output_type}/checkpoint-10000/"
+            bart_model_config = BartModelConfig(
+                model_id="Bart", model_loc=Path(model_loc)
+            )
+            bart_model, clamp_tokenizer, _ = bart_model_config.setup_model()
             lm = Seq2SeqBart(
-                f"{TRAINED_MODEL_DIR}/20000/overnight_{domain}_{output_type}/",
-                device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
+                # Model location set to match lm_finetune.py
+                pretrained_model_dir=model_loc,
+                model=bart_model,
+                clamp_tokenizer=clamp_tokenizer,
             )
         else:
             raise ValueError(model)
@@ -77,6 +89,8 @@ def build_config(_log_dir, **_kwargs,) -> Dict[str, Callable[[], Experiment]]:
             test_data = pieces.test_data
         elif eval_split in (EvalSplit.TestSubset, EvalSplit.DevSubset):
             test_data = pieces.test_data[:100]
+        else:
+            raise ValueError(eval_split)
 
         partial_parse_builder: Callable[[Datum], PartialParse]
         if problem_type == "constrained":
@@ -96,7 +110,10 @@ def build_config(_log_dir, **_kwargs,) -> Dict[str, Callable[[], Experiment]]:
 
         parser = make_semantic_parser(
             train_data,
-            lm,
+            # Erase type of `lm` since we're not passing any other arguments
+            # that have the HS type variable.
+            # TODO: Think if there's a better way to do this
+            cast(AutoregressiveModel[Any], lm),
             use_gpt3,
             max_steps,
             beam_size,

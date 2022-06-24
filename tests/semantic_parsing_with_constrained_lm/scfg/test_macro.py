@@ -52,8 +52,8 @@ def test_replace_macros(parser, macro_rules):
         '"(create Event" g(z1, z2) ")"', '"(create Event""(g"z1z2")"")"'
     )
     test_replace_helper(
-        '"(create Event" f(g(z1, z2)) ")"', '"(create Event""(f""(g"z1z2")"z")"")"',
+        '"(create Event" f(g(z1, z2)) ")"', '"(create Event""(f""(g"z1z2")"z")"")"'
     )
     test_replace_helper(
-        '"(create Event" h(z) j() i ")"', '"(create Event""(f""(g"zz")"z")"j1j2i")"',
+        '"(create Event" h(z) j() i ")"', '"(create Event""(f""(g"zz")"z")"j1j2i")"'
     )

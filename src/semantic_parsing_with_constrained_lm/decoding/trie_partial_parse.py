@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import torch
 
 from semantic_parsing_with_constrained_lm.util.trie import Trie
-from semantic_parsing_with_constrained_lm.search import PartialParse
+from semantic_parsing_with_constrained_lm.decoding.partial_parse import PartialParse
 
 
 @dataclass

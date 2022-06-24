@@ -1,718 +1,266 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-""" Finetunes BART and GPT2 model with the canonical utterance generation task. """
-import itertools
+""" Finetunes language models for CLAMP task using transformers Trainer interface. """
+import dataclasses
+import glob
+import importlib
 import os
+import pathlib
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Set, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Sequence
 
 import jsons
 import torch
 import typer
+from torch import tensor
 from torch.utils.data.dataset import Dataset
-from transformers import (
-    BartForConditionalGeneration,
-    BartTokenizer,
-    GPT2LMHeadModel,
-    GPT2Tokenizer,
-    PreTrainedModel,
-)
+from transformers import PreTrainedModel, Trainer, TrainingArguments
 
-from semantic_parsing_with_constrained_lm.datum import Datum, FullDatum
-from semantic_parsing_with_constrained_lm.domains.calflow import (
-    CalflowOutputLanguage,
-    read_calflow_jsonl,
-)
-from semantic_parsing_with_constrained_lm.domains.overnight import OutputType, OvernightPieces
-from semantic_parsing_with_constrained_lm.domains.qdmr_break import (
-    BreakDataType,
-    BreakPieces,
-    BreakSamplingType,
-)
-from semantic_parsing_with_constrained_lm.fewshot import PromptBuilder
-from semantic_parsing_with_constrained_lm.lm import TRAINED_MODEL_DIR, Seq2SeqSettings, Surround
-from semantic_parsing_with_constrained_lm.paths import DOMAINS_DIR
-from semantic_parsing_with_constrained_lm.finetune.batch_sampler import BucketBatchSampler
+import semantic_parsing_with_constrained_lm
+from semantic_parsing_with_constrained_lm.util import logger
+from semantic_parsing_with_constrained_lm.datum import FullDatum
+from semantic_parsing_with_constrained_lm.lm import Seq2SeqSettings
+from semantic_parsing_with_constrained_lm.run_exp import filter_exp_dict
+from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
-TokensAndMasksWithoutDecoder = Tuple[List[str], List[int], List[int]]
-TokensAndMasksWithDecoder = Tuple[List[str], List[int], List[int], List[str]]
-TokensAndMasks = Union[TokensAndMasksWithoutDecoder, TokensAndMasksWithDecoder]
-
-PRETRAINED_MODEL_DIR = os.environ["PRETRAINED_MODEL_DIR"]
-
-
-def token_level_loss(
-    input_token_ids: torch.Tensor, lm_logits: torch.Tensor
-) -> torch.Tensor:
-    """Same as above but returns the loss tensor"""
-    # Shift so that tokens < n predict n
-    shift_logits = lm_logits[..., :-1, :].contiguous()
-    shift_labels = input_token_ids[..., 1:].contiguous()
-    # Flatten the tokens
-    loss = torch.nn.functional.cross_entropy(
-        shift_logits.view(-1, shift_logits.size(-1)),
-        shift_labels.view(-1),
-        reduction="none",
-    )
-    return loss
-
-
-class ModelForFineTuning(str, Enum):
-    GPT2 = "GPT2"
-    # Encoder tokens: "Human", ":", " natural", " utterance", "\n"
-    # Decoder inputs: "Computer", ":", " canonical", " utterance"
-    # Decoder labels: ":", " canonical", " utterance", "\n"
-    BART = "Bart"
-    # Encoder tokens: "<s>", "natural", " utterance", "</s>"
-    # Decoder inputs: "</s>", "<s>", "canonical", " utterance"
-    # Decoder labels: "<s>", <canonical", " utterance", "</s>"
-    BARTv2 = "BartV2"
-    # Encoder tokens: "<s>", " natural", " utterance", "</s>"
-    # Decoder inputs: "</s>", "<s>", " canonical", " utterance"
-    # Decoder labels: "<s>", " canonical", " utterance", "</s>"
-    BARTv3 = "BartV3"
+PRETRAINED_MODEL_DIR = os.environ.get("PRETRAINED_MODEL_DIR", "")
+MAX_OUTPUT_SEQUENCE_FOR_TRAINING = 500
 
 
 @dataclass
-class ModelPieces:
-    model: PreTrainedModel
-    tokenizer: GPT2Tokenizer
-    model_type: ModelForFineTuning
-    new_line_bpe_char: str
+class DataCollatorForSeq2Seq:
+    """Simple Data collator that works with ClampDataset items."""
 
-    @staticmethod
-    def from_model_type(model_type: ModelForFineTuning) -> "ModelPieces":
-        if model_type.startswith("Bart"):
-            model = BartForConditionalGeneration.from_pretrained(PRETRAINED_MODEL_DIR)
-            model.to(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
-            tokenizer = BartTokenizer.from_pretrained(PRETRAINED_MODEL_DIR)
-        elif model_type == ModelForFineTuning.GPT2:
-            # Only uses GPUs if more than 4 available
-            model = GPT2LMHeadModel.from_pretrained(PRETRAINED_MODEL_DIR)
-            if torch.cuda.is_available() and torch.cuda.device_count() >= 4:
-                device_map = {
-                    0: list(range(12)),
-                    1: list(range(12, 24)),
-                    2: list(range(24, 36)),
-                    3: list(range(36, 48)),
-                }
-                model.parallelize(device_map)  # Splits the model across several devices
+    pad_token_id: int = -100
+
+    def __call__(self, features: List[Dict]):
+        inputs_with_labels = []
+        skips = []
+        skips_present = False
+        # Removing examples with output length > MAX_OUTPUT_SEQUENCE_FOR_TRAINING
+        # Trimming from start for long input sequences
+        for feature in features:
+            if len(feature["labels"]) <= MAX_OUTPUT_SEQUENCE_FOR_TRAINING:
+                # start_index = max(0, len(feature["input_ids"]) - MAX_INPUT_SEQUENCE_FOR_TRAINING)
+                inputs_with_labels.append((feature["input_ids"], feature["labels"]))
             else:
-                model.to(torch.device("cpu"))
-            tokenizer = GPT2Tokenizer.from_pretrained(PRETRAINED_MODEL_DIR)
-        else:
-            raise ValueError(model_type)
-        new_line_bpe_char = tokenizer.byte_encoder[ord("\n")]
-        return ModelPieces(model, tokenizer, model_type, new_line_bpe_char)
+                skips.append((len(feature["input_ids"]), len(feature["labels"])))
+                skips_present = True
+
+        if skips_present:
+            print(f"Skipping: {skips}")
+
+        labels_list = [labels for _, labels in inputs_with_labels]
+        max_labels_length = max(len(labels) for labels in labels_list)
+        input_ids_list = [inputs for inputs, _ in inputs_with_labels]
+        max_input_length = max(len(input_ids) for input_ids in input_ids_list)
+        attention_mask = []
+        padded_input_ids = []
+        padded_labels = []
+        for input_ids in input_ids_list:
+            padded_input_ids.append(
+                input_ids + [self.pad_token_id] * (max_input_length - len(input_ids))
+            )
+            attention_mask.append(
+                [1] * len(input_ids) + [0] * (max_input_length - len(input_ids))
+            )
+        for labels in labels_list:
+            # -100 will remove the labels from loss computation
+            padded_labels.append(labels + [-100] * (max_labels_length - len(labels)))
+        return {
+            "input_ids": tensor(padded_input_ids, dtype=torch.long),
+            "labels": tensor(padded_labels, dtype=torch.long),
+            "attention_mask": tensor(attention_mask, dtype=torch.long),
+        }
 
 
-class NoamOpt:
-    """Optim wrapper that implements Noam learning rate schedule."""
+@dataclass
+class TrainExperiment:
+    train_data: Sequence[FullDatum]
+    eval_data: Sequence[FullDatum]
+    model: PreTrainedModel
+    tokenizer: ClampTokenizer
+    seq2seq_settings: Seq2SeqSettings
+    is_encoder_decoder: bool
+    training_args: TrainingArguments
+    log_dir: Path
 
-    def __init__(
-        self,
-        model_size: int,
-        factor: float,
-        warmup: int,
-        optimizer: torch.optim.Optimizer,
-    ):
-        self.optimizer = optimizer
-        self._step = 0
-        self.warmup = warmup
-        self.factor = factor
-        self.model_size = model_size
-        self._rate = 0.0
-
-    def step(self) -> None:
-        """Update parameters and rate"""
-        self._step += 1
-        rate = self.rate()
-        for p in self.optimizer.param_groups:
-            p["lr"] = rate
-        self._rate = rate
-        self.optimizer.step()
-
-    def rate(self, step: Optional[int] = None) -> float:
-        """Implement `lrate` above"""
-        if step is None:
-            step = self._step
-        return self.factor * (
-            self.warmup ** 0.5 * min(step ** (-0.5), step * self.warmup ** (-1.5))
+    def make_clamp_dataset(self, data: Sequence[FullDatum]) -> "ClampDataset":
+        return ClampDataset(
+            data=data,
+            tokenizer=self.tokenizer,
+            is_encoder_decoder=self.is_encoder_decoder,
+            seq2seq_settings=self.seq2seq_settings,
         )
 
 
-class MultiplicativeOpt:
-    """Optim wrapper that implements linear warmup followed by multiplicative decay."""
+@dataclass
+class ClampDataset(Dataset):
+    data: Sequence[FullDatum]
+    tokenizer: ClampTokenizer
+    is_encoder_decoder: bool
+    seq2seq_settings: Seq2SeqSettings
 
-    def __init__(
-        self,
-        max_lr: float,
-        warmup: int,
-        steps_per_decay: int,
-        optimizer: torch.optim.Optimizer,
-        lr_min: float = 1e-9,
-    ):
-        self.optimizer = optimizer
-        self.max_lr = max_lr
-        self.warmup = warmup
-        self.steps_per_decay = steps_per_decay
-        self._step = 0
-        self._rate = 0.0
-        self.lr_min = lr_min
-
-    def step(self) -> None:
-        """Update parameters and rate"""
-        self._step += 1
-        rate = self.rate()
-        for p in self.optimizer.param_groups:
-            p["lr"] = rate
-        self._rate = rate
-        self.optimizer.step()
-
-    def rate(self, step: Optional[int] = None) -> float:
-        """Implement `lrate` above"""
-        if step is None:
-            step = self._step
-
-        if step < self.warmup:
-            rate = self.max_lr * step / self.warmup
-        elif step % self.steps_per_decay == 0:
-            rate = self._rate * 0.999
-        else:
-            rate = self._rate
-
-        return max(self.lr_min, rate)
-
-
-def get_std_opt(
-    model: PreTrainedModel, max_lr: float, warmup_steps: int, steps_per_decay: int
-) -> MultiplicativeOpt:
-    return MultiplicativeOpt(
-        max_lr=max_lr,
-        warmup=warmup_steps,
-        steps_per_decay=steps_per_decay,
-        optimizer=torch.optim.Adam(
-            model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9
-        ),
-    )
-
-
-class SimpleDataset(Dataset):
-    def __init__(self, data: List[FullDatum]):
-        self.data = data
-        self.length = len(data)
-
-    def __getitem__(self, index):
-        return self.data[index]
+    cache: Dict[int, Dict[str, Any]] = dataclasses.field(default_factory=dict)
 
     def __len__(self):
-        return self.length
+        return len(self.data)
 
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        cached = self.cache.get(idx)
+        if cached is not None:
+            return cached
 
-def get_input_tokens(
-    datum: FullDatum, mp: ModelPieces, use_context: bool = False
-) -> TokensAndMasks:
-    prompt_builder = PromptBuilder.for_demo(
-        do_include_context=use_context, use_preamble=False,
-    )
-    utt_with_context = prompt_builder.assemble(
-        [],
-        Datum(
-            dialogue_id=None,
-            turn_part_index=None,
-            natural=datum.natural,
-            agent_context=datum.agent_context,
-        ),
-    ).rstrip(" ")
-    canonical_utt = " " + datum.canonical
-    if mp.model_type == ModelForFineTuning.BART:
-        prompt = utt_with_context + canonical_utt
-        split_index = prompt.index("\n")
-        if split_index == -1:
-            print(
-                "newline not found, can't split prompt into encoder and decoder inputs"
-            )
-        encoder_input = prompt[:split_index]
-        decoder_input = prompt[split_index + 1 :]
-        encoder_tokens = mp.tokenizer.tokenize(encoder_input) + [mp.new_line_bpe_char]
-        decoder_tokens = mp.tokenizer.tokenize(decoder_input) + [mp.new_line_bpe_char]
-        attention_mask = [1] * len(encoder_tokens)
-        loss_attention_mask = [1] * len(decoder_tokens)
-        return (
-            encoder_tokens,
-            attention_mask,
-            loss_attention_mask,
-            decoder_tokens,
+        datum = self.data[idx]
+        natural = (
+            " " + datum.natural
+            if self.seq2seq_settings.input_surround.starts_with_space
+            else datum.natural
         )
-    elif mp.model_type in (ModelForFineTuning.BARTv2, ModelForFineTuning.BARTv3):
-        if mp.model_type == ModelForFineTuning.BARTv2:
-            natural = datum.natural
-            canonical = datum.canonical
+        input_token_ids = (
+            self.seq2seq_settings.input_surround.bos
+            + self.tokenizer.encode(natural)
+            + self.seq2seq_settings.input_surround.eos
+        )
+        canonical = (
+            " " + datum.canonical
+            if self.seq2seq_settings.output_surround.starts_with_space
+            else datum.canonical
+        )
+        output_token_ids = (
+            self.seq2seq_settings.output_surround.bos
+            + self.tokenizer.encode(canonical)
+            + self.seq2seq_settings.output_surround.eos
+        )
+        if self.is_encoder_decoder:
+            result = {
+                "input_ids": input_token_ids,
+                "labels": output_token_ids,
+                "length": len(input_token_ids),
+            }
         else:
-            natural = " " + datum.natural
-            canonical = " " + datum.canonical
-        assert not use_context
-        encoder_tokens = (
-            [mp.tokenizer.bos_token]
-            + mp.tokenizer.tokenize(natural)
-            + [mp.tokenizer.eos_token]
-        )
-        decoder_tokens = (
+            result = {
+                "input_ids": input_token_ids + output_token_ids,
+                # -100 is ignored while computing loss
+                "labels": [-100] * len(input_token_ids) + output_token_ids,
+                "length": len(input_token_ids),
+            }
+        self.cache[idx] = result
+        return result
+
+
+def reset_gpu_stats(msg: str) -> None:
+    print(msg)
+    if torch.cuda.is_available():
+        for gpu_id in range(torch.cuda.device_count()):
+            torch.cuda.reset_peak_memory_stats(gpu_id)
+
+
+def print_gpu_stats(msg: str) -> None:
+    print(msg)
+    if torch.cuda.is_available():
+        for gpu_id in range(torch.cuda.device_count()):
+            total_memory = torch.cuda.get_device_properties(gpu_id).total_memory
+            max_allocated_memory = torch.cuda.max_memory_allocated(gpu_id)
+            print(
+                f"Max memory GPU {gpu_id}:",
+                max_allocated_memory,
+                "/",
+                total_memory,
+                "=",
+                max_allocated_memory / total_memory,
+            )
+
+
+def run(
+    exp_name: str, exp: TrainExperiment, log_dir: Optional[pathlib.Path] = None
+) -> None:
+    print(f"Running train experiment {exp_name} with train size {len(exp.train_data)}")
+    print(f"Batch size per device: {exp.training_args.per_device_train_batch_size}")
+    print(
+        f"Gradient accumulation steps: {exp.training_args.gradient_accumulation_steps}"
+    )
+    reset_gpu_stats("")
+    train_output_sequence_lengths = [
+        len(exp.tokenizer.encode(" " + datum.canonical)) for datum in exp.train_data
+    ]
+    print(
+        f"Number of examples removed on output truncation at length {MAX_OUTPUT_SEQUENCE_FOR_TRAINING}:",
+        sum(
             [
-                mp.tokenizer.convert_ids_to_tokens(
-                    mp.model.config.decoder_start_token_id
-                ),
-                mp.tokenizer.bos_token,
+                1 if length > MAX_OUTPUT_SEQUENCE_FOR_TRAINING else 0
+                for length in train_output_sequence_lengths
             ]
-            + mp.tokenizer.tokenize(canonical)
-            + [mp.tokenizer.eos_token]
-        )
-        attention_mask = [1] * len(encoder_tokens)
-        loss_attention_mask = [1] * len(decoder_tokens)
-        return (
-            encoder_tokens,
-            attention_mask,
-            loss_attention_mask,
-            decoder_tokens,
-        )
-    elif mp.model_type == ModelForFineTuning.GPT2:
-        canonical_utt_len = len(mp.tokenizer.tokenize(canonical_utt))
-        all_input_tokens = mp.tokenizer.tokenize(utt_with_context + canonical_utt) + [
-            mp.new_line_bpe_char
-        ]
-        loss_attention_mask = [0] * (len(all_input_tokens) - canonical_utt_len - 3) + [
-            1
-        ] * (canonical_utt_len + 3)
-        attention_mask = [1] * len(all_input_tokens)
-        return all_input_tokens, attention_mask, loss_attention_mask
-    else:
-        raise ValueError(mp.model_type)
-
-
-def get_single_batch(
-    data: List[FullDatum],
-    mp: ModelPieces,
-    device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
-    use_context=False,
-) -> List[torch.Tensor]:
-    """
-    Converts FullDatum list to data and mask tensors for a single batch.
-    Returns tuple containing input ids tensor, attention mask tensor,
-    and a mask tensor to select tokens for the loss. If separate_encoder_decoder=True, also
-    returns decoder input ids tensor, and decoder attention mask tensor.
-    """
-    batch_token_ids: List[
-        List[int]
-    ] = []  # Each list element is token ids for a FullDatum
-    batch_attention_mask: List[
-        List[int]
-    ] = []  # Each list element is attention mask for a FullDatum
-    # Each list element of loss_attention_mask is a mask over tokens we want to consider for the loss.
-    # In addition to pad tokens, we also mask out tokens in the input prompt.
-    batch_loss_attention_mask: List[List[int]] = []
-    batch_decoder_token_ids: List[List[int]] = []
-
-    for datum in data:
-        inputs = get_input_tokens(datum, mp, use_context=use_context)
-        if mp.model_type.startswith("Bart"):
-            (
-                datum_tokens,
-                datum_attention_mask,
-                datum_loss_attention_mask,
-                datum_decoder_tokens,
-            ) = cast(TokensAndMasksWithDecoder, inputs)
-            batch_attention_mask.append(datum_attention_mask)
-            batch_loss_attention_mask.append(datum_loss_attention_mask)
-            batch_token_ids.append(mp.tokenizer.convert_tokens_to_ids(datum_tokens))
-            batch_decoder_token_ids.append(
-                mp.tokenizer.convert_tokens_to_ids(datum_decoder_tokens)
-            )
-        else:
-            (  # pylint: disable=W0632
-                datum_tokens,
-                datum_attention_mask,
-                datum_loss_attention_mask,
-            ) = cast(TokensAndMasksWithoutDecoder, inputs)
-            batch_attention_mask.append(datum_attention_mask)
-            batch_loss_attention_mask.append(datum_loss_attention_mask)
-            batch_token_ids.append(mp.tokenizer.convert_tokens_to_ids(datum_tokens))
-
-    max_length = max([len(token_ids) for token_ids in batch_token_ids])
-    max_decoder_length = (
-        max([len(token_ids) for token_ids in batch_decoder_token_ids])
-        if len(batch_decoder_token_ids) > 0
-        else 0
+        ),
     )
-    for index, _ in enumerate(batch_token_ids):
-        length = len(batch_token_ids[index])
-        pad_length = max_length - length
-        batch_token_ids[index] += [mp.tokenizer.pad_token_id] * pad_length
-        batch_attention_mask[index] += [0] * pad_length
-        if mp.model_type.startswith("Bart"):
-            decoder_length = len(batch_decoder_token_ids[index])
-            decoder_pad_length = max_decoder_length - decoder_length
-            batch_loss_attention_mask[index] += [0] * decoder_pad_length
-            batch_decoder_token_ids[index] += [
-                mp.tokenizer.pad_token_id
-            ] * decoder_pad_length
-        else:
-            batch_loss_attention_mask[index] += [0] * pad_length
+    train_dataset = exp.make_clamp_dataset(exp.train_data)
+    eval_dataset = exp.make_clamp_dataset(exp.eval_data)
+    if log_dir is not None:
+        exp.training_args.logging_dir = log_dir / exp_name
+        exp.log_dir = log_dir / exp_name
 
-    if mp.model_type.startswith("Bart"):
-        outputs = [
-            torch.tensor(batch_token_ids),
-            torch.tensor(batch_attention_mask),
-            torch.tensor(batch_loss_attention_mask),
-            torch.tensor(batch_decoder_token_ids),
-        ]
-    else:
-        outputs = [
-            torch.tensor(batch_token_ids),
-            torch.tensor(batch_attention_mask),
-            torch.tensor(batch_loss_attention_mask),
-        ]
-
-    return [t.to(device) for t in outputs]
-
-
-def get_loss(
-    model,
-    input_token_ids: torch.Tensor,
-    attention_mask: Optional[torch.Tensor],
-    loss_attention_mask: Optional[torch.Tensor],
-    decoder_token_ids: Optional[torch.Tensor] = None,
-):
-    """Computes the loss function using the LM probability"""
-    if decoder_token_ids is None:
-        outputs = model(input_token_ids, attention_mask=attention_mask)
-        batch_size = input_token_ids.shape[0]
-        lm_logits = outputs[0]
-        token_level_loss_val = token_level_loss(input_token_ids, lm_logits)
-    else:
-        outputs = model(
-            input_token_ids,
-            attention_mask=attention_mask,
-            decoder_input_ids=decoder_token_ids,
-        )
-        batch_size = input_token_ids.shape[0]
-        lm_logits = outputs[0]
-        token_level_loss_val = token_level_loss(decoder_token_ids, lm_logits)
-
-    return (
-        torch.sum(token_level_loss_val * loss_attention_mask[..., :-1].reshape(-1))
-        / batch_size
+    print_gpu_stats("Before Training GPU State")
+    trainer = Trainer(
+        model=exp.model,
+        args=exp.training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        data_collator=DataCollatorForSeq2Seq(exp.tokenizer.pad_token_id),
     )
+    trainer.train()
+    print_gpu_stats("After Training GPU State")
 
+    # save tokenizer and seq2seq_settings in each checkpoint directory
+    for checkpoint_dir in glob.glob(f"{exp.training_args.output_dir}/checkpoint-*/"):
+        exp.tokenizer.save_pretrained(checkpoint_dir)
+        with open(f"{checkpoint_dir}/seq2seq_settings.json", "w") as settings_f:
+            settings_f.write(jsons.dumps(exp.seq2seq_settings))
 
-def train_model(
-    mp: ModelPieces,
-    exp_name: str,
-    train_data: Iterable[Any],
-    eval_data: Iterable[Any],
-    num_steps: int,
-    lr: float,
-    warmup_steps: int,
-    steps_per_decay: int,
-    steps_per_eval: int,
-    steps_per_display: int,
-    steps_per_save: int,
-    batch_size: int,
-    use_context: bool,
-    save_loc: Optional[str] = None,
-):
-    """
-    Main train function.
-    train_data and eval_data can be List[FullDatum] or List[BreakDatum].
-    rank: id of GPU cluster running a single training pass. (each cluster can include multiple GPUs.)
-    world_size: total number of parallel training passes being run by distributed training.
-    """
-    train_batch_sampler = BucketBatchSampler(
-        batch_size=batch_size, bucket_width=50, shuffle_buffer_size=1000,
-    )
-    eval_batch_sampler = BucketBatchSampler(
-        batch_size=batch_size, bucket_width=50, shuffle_buffer_size=1000,
-    )
-    # This needs to be consistent with what's done in prompt_builder and get_input_tokens.
-    seq2seq_settings: Optional[Seq2SeqSettings] = None
-    if mp.model_type in (ModelForFineTuning.GPT2, ModelForFineTuning.BART):
-        seq2seq_settings = Seq2SeqSettings(
-            input_surround=Surround(bos="Human: ", eos="\n"),
-            output_surround=Surround(bos="Computer: ", eos="\n"),
-        )
-    elif mp.model_type == ModelForFineTuning.BARTv2:
-        seq2seq_settings = Seq2SeqSettings(
-            input_surround=Surround(
-                bos=[mp.tokenizer.bos_token_id], eos=[mp.tokenizer.eos_token_id]
-            ),
-            output_surround=Surround(
-                bos=[mp.model.config.decoder_start_token_id, mp.tokenizer.bos_token_id],
-                eos=[mp.tokenizer.eos_token_id],
-            ),
-        )
-    elif mp.model_type == ModelForFineTuning.BARTv3:
-        seq2seq_settings = Seq2SeqSettings(
-            input_surround=Surround(bos="<s> ", eos=[mp.tokenizer.eos_token_id]),
-            output_surround=Surround(bos="</s><s> ", eos=[mp.tokenizer.eos_token_id],),
-        )
-
-    # Model training
-    optimizer = get_std_opt(mp.model, lr, warmup_steps, steps_per_decay)
-    print(f"{exp_name} {lr} {steps_per_decay}: steps {num_steps}.")
-    step = 0
-    mp.model.train()
-    for train_datum in train_batch_sampler.batch(itertools.cycle(train_data)):
-        train_inputs = get_single_batch(train_datum, mp, use_context=use_context)
-        if mp.model_type.startswith("Bart"):
-            (
-                train_input_ids,
-                train_attention_mask,
-                train_loss_attention_mask,
-                train_decoder_input_ids,
-            ) = train_inputs
-            train_loss = get_loss(
-                mp.model,
-                train_input_ids,
-                attention_mask=train_attention_mask,
-                loss_attention_mask=train_loss_attention_mask,
-                decoder_token_ids=train_decoder_input_ids,
-            )
-        else:
-            (
-                train_input_ids,
-                train_attention_mask,
-                train_loss_attention_mask,
-            ) = train_inputs
-            train_loss = get_loss(
-                mp.model,
-                train_input_ids,
-                attention_mask=train_attention_mask,
-                loss_attention_mask=train_loss_attention_mask,
-            )
-
-        train_loss.backward()
-        torch.nn.utils.clip_grad_norm_(mp.model.parameters(), 10)
-        optimizer.step()
-        step += 1
-
-        if step % steps_per_display == 0:
-            print(
-                f"{datetime.now()} {batch_size} {lr} {steps_per_decay}: Step {step} || LR {optimizer.rate()} "
-                f"|| Train loss for batch {train_loss.item()}"
-            )
-
-        if step % steps_per_eval == 0:
-            print(
-                f"{exp_name} {lr} {steps_per_decay}: {len(train_batch_sampler.batch_sizes_generated)} "
-                f"batches with average size {train_batch_sampler.get_average_batch_size()}"
-            )
-            print(f"{exp_name} {lr} {steps_per_decay}: Evaluating ...")
-            mp.model.eval()
-            eval_loss = 0.0
-            for eval_datum in eval_batch_sampler.batch(eval_data):
-                eval_inputs = get_single_batch(eval_datum, mp, use_context=use_context)
-                if mp.model_type.startswith("Bart"):
-                    (
-                        eval_input_ids,
-                        eval_attention_mask,
-                        eval_loss_attention_mask,
-                        eval_decoder_input_ids,
-                    ) = eval_inputs
-                    eval_loss += get_loss(
-                        mp.model,
-                        eval_input_ids,
-                        attention_mask=eval_attention_mask,
-                        loss_attention_mask=eval_loss_attention_mask,
-                        decoder_token_ids=eval_decoder_input_ids,
-                    ).item()
-                else:
-                    (
-                        eval_input_ids,
-                        eval_attention_mask,
-                        eval_loss_attention_mask,
-                    ) = eval_inputs
-                    eval_loss += get_loss(
-                        mp.model,
-                        eval_input_ids,
-                        attention_mask=eval_attention_mask,
-                        loss_attention_mask=eval_loss_attention_mask,
-                    ).item()
-
-            print(
-                f"{exp_name} {lr}: Step {step} || LR {optimizer.rate()} || Eval loss {eval_loss}"
-            )
-            mp.model.train()
-            print(f"{exp_name} {lr}: Done")
-
-        if (step % steps_per_save == 0 and step > 0) or step == num_steps:
-            if save_loc is None:
-                model_dir = f"{TRAINED_MODEL_DIR}/{step}/{exp_name}"
-            else:
-                model_dir = f"{save_loc}/{step}/{exp_name}"
-            print(f"{exp_name} {lr}: Saving trained model to {model_dir}")
-            mp.model.eval()
-            if not os.path.exists(f"{model_dir}"):
-                os.makedirs(f"{model_dir}", exist_ok=True)
-            mp.model.save_pretrained(model_dir)
-            mp.tokenizer.save_pretrained(model_dir)
-            if seq2seq_settings is not None:
-                with open(f"{model_dir}/seq2seq_settings.json", "w") as settings_f:
-                    settings_f.write(jsons.dumps(seq2seq_settings))
-
-            print(f"{exp_name} {lr}: Done")
-
-        if step >= num_steps:
-            break
-
-    if num_steps == 0:
-        if save_loc is None:
-            model_dir = f"{TRAINED_MODEL_DIR}/0/{exp_name}"
-        else:
-            model_dir = f"{save_loc}/0/{exp_name}"
-        print(f"{exp_name} {lr}: Saving trained model to {model_dir}")
-        mp.model.eval()
-        if not os.path.exists(f"{model_dir}"):
-            os.makedirs(f"{model_dir}", exist_ok=True)
-        mp.model.save_pretrained(model_dir)
-        mp.tokenizer.save_pretrained(model_dir)
-        if seq2seq_settings is not None:
-            with open(f"{model_dir}/seq2seq_settings.json", "w") as settings_f:
-                settings_f.write(jsons.dumps(seq2seq_settings))
-        print(f"{exp_name} {lr}: Done")
-
-    del optimizer
+    print(f"Train experiment {exp_name} completed.")
+    del exp
+    del train_dataset
+    del eval_dataset
+    del trainer
     torch.cuda.empty_cache()
 
 
 def main(
-    lr: float = typer.Option(1e-5),
+    config_name: str = typer.Option(...),
     exp_names: Optional[List[str]] = typer.Option(None),
-    num_steps: int = typer.Option(20000),
-    warmup_steps: int = typer.Option(1000),
-    steps_per_decay: int = typer.Option(2),
-    steps_per_eval: int = typer.Option(1000),
-    steps_per_display: int = typer.Option(100),
-    steps_per_save: int = typer.Option(20000),
-    batch_size: int = typer.Option(32),
-    calflow_train_data_file: Path = typer.Option(
-        DOMAINS_DIR / "calflow/data/train_300_stratified.jsonl",
-    ),
-    calflow_eval_data_file: Path = typer.Option(
-        DOMAINS_DIR / "calflow/data/dev_100_uniform.jsonl",
-    ),
-    use_context: bool = typer.Option(False),
-    model_type: ModelForFineTuning = typer.Option(ModelForFineTuning.BARTv3),
-    calflow_filter_by_ids_file: Optional[str] = typer.Option(None),
+    exp_name_pattern: Optional[List[str]] = typer.Option(None),
+    log_dir: Optional[pathlib.Path] = typer.Option(None),
+    batch_size: Optional[int] = typer.Option(None),
 ):
-    model_pieces = ModelPieces.from_model_type(model_type)
-    train_eval_output_list: List[Tuple[str, List[Any], List[Any]]] = []
-    for calflow_data_type in list(CalflowOutputLanguage):
-        exp_name = f"calflow_{calflow_data_type}"
-        if exp_name not in exp_names:
+    config_mod = importlib.import_module(config_name)
+    exps = config_mod.build_config(log_dir)  # type: ignore
+    filtered_exp_dict = filter_exp_dict(exps, exp_names, exp_name_pattern)
+    for exp_name in filtered_exp_dict:
+        now = datetime.now().strftime("%Y%m%dT%H%M%S")
+        try:
+            print(f"Instantiating {exp_name}")
+            exp = filtered_exp_dict[exp_name]()
+        except FileNotFoundError as err:
+            # Trying to load models before training and saving them.
+            print(err)
             continue
 
-        print(f"{exp_name} {lr}: Loading data for exp name {exp_name}")
-        train_data = read_calflow_jsonl(calflow_train_data_file, calflow_data_type,)
-        print(f"Train data read {len(train_data)}")
-        if calflow_filter_by_ids_file is not None:
-            ids: Set[Tuple[str, int]] = set()
-            with open(calflow_filter_by_ids_file, "r") as id_file:
-                for _, line in enumerate(id_file):
-                    dialogue_id, turn_index = line.strip().split(",")
-                    ids.add((dialogue_id.strip(), int(turn_index.strip())))
-            train_data = [
-                datum
-                for datum in train_data
-                if (datum.dialogue_id, datum.turn_part_index) in ids
-            ]
-        print(f"Train data after filtering {len(train_data)}")
-        eval_data = read_calflow_jsonl(calflow_eval_data_file, calflow_data_type,)[:100]
-        train_eval_output_list.append((exp_name, train_data, eval_data))
-
-    # Overnight experiments
-    domains = (
-        "housing",
-        "calendar",
-        "socialnetwork",
-        "basketball",
-        "blocks",
-        "publications",
-        "recipes",
-        "restaurants",
-    )
-    for domain in domains:
-        for overnight_data_type in [
-            OutputType.Utterance,
-            OutputType.MeaningRepresentation,
-        ]:
-            exp_name = f"overnight_{domain}_{overnight_data_type}"
-            if exp_name not in exp_names:
-                continue
-
-            print(f"{exp_name} {lr}: Loading data for exp name {exp_name}")
-            overnight_pieces = OvernightPieces.from_dir(
-                model_pieces.tokenizer,
-                DOMAINS_DIR / "overnight/data",
-                domain,
-                is_dev=True,
-                k=1,
-                output_type=overnight_data_type,
-                simplify_logical_forms=True,
-                prefix_with_space=True,
-            )
-            train_eval_output_list.append(
-                (
-                    exp_name,
-                    overnight_pieces.train_data[:200],
-                    overnight_pieces.test_data[:100],
-                )
-            )
-
-    # Break experiments
-    for break_data_type in list(BreakDataType):
-        exp_name = f"break_{break_data_type.value}"
-        if exp_name not in exp_names:
-            continue
-
-        print(f"{exp_name} {lr}: Loading data for exp name {exp_name}")
-        break_pieces = BreakPieces.build(
-            model_pieces.tokenizer,
-            data_type=break_data_type,
-            train_sampling_type=BreakSamplingType.proportional,
-            test_sampling_type=BreakSamplingType.random,
-            train_total=200,
-            test_total=100,
-            seed=0,
-        )
-        train_eval_output_list.append(
-            (exp_name, break_pieces.train_data, break_pieces.test_data,)
-        )
-
-    for exp_name, train_data, eval_data in train_eval_output_list:
-        print(
-            f"{exp_name} {lr}: Training on {len(train_data)} examples; saving to {TRAINED_MODEL_DIR}; "
-            f"for {num_steps} steps lr {lr}"
-        )
-        train_data = [datum for datum in train_data if datum.canonical is not None]
-        eval_data = [datum for datum in eval_data if datum.canonical is not None]
-        train_model(
-            model_pieces,
-            exp_name,
-            train_data,
-            eval_data,
-            num_steps,
-            lr,
-            warmup_steps,
-            steps_per_decay,
-            steps_per_eval,
-            steps_per_display,
-            steps_per_save,
-            batch_size,
-            use_context,
-        )
+        if isinstance(exp, semantic_parsing_with_constrained_lm.finetune.lm_finetune.TrainExperiment):  # type: ignore
+            exp_log_dir = exp.log_dir / exp_name
+            exp_log_dir.mkdir(exist_ok=True, parents=True)
+            if batch_size is not None:
+                exp.training_args.per_device_train_batch_size = batch_size
+                exp.training_args.gradient_accumulation_steps = 32 // batch_size
+            with logger.intercept_output(
+                Path(f"{exp_log_dir}/stdout.{now}"),
+                Path(f"{exp_log_dir}/stderr.{now}"),
+            ):
+                run(exp_name, exp, log_dir)
+        else:
+            del exp
+            torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

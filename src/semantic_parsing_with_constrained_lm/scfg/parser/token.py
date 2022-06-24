@@ -2,15 +2,16 @@
 # Licensed under the MIT License.
 
 import json
-import re
 from abc import ABC, abstractmethod
-from typing import Pattern, Tuple
+from dataclasses import dataclass
+from typing import List, Tuple
 
+import regex
 from cached_property import cached_property
-from pydantic.dataclasses import dataclass
+
+ASCII_CHARS: List[str] = [chr(i) for i in range(32, 127)]
 
 
-@dataclass(frozen=True)
 class SCFGToken(ABC):
     def render(self) -> str:
         """
@@ -30,7 +31,7 @@ class SCFGToken(ABC):
         return self.value
 
 
-class OptionableSCFGToken(SCFGToken):
+class OptionableSCFGToken(SCFGToken, ABC):
     optional: bool
 
 
@@ -77,6 +78,7 @@ class MacroToken(SCFGToken):
         return f"{self.name}({','.join([a.value for a in self.args])})"
 
 
+@dataclass(frozen=True)
 class EmptyToken(SCFGToken):
     @property
     def value(self):
@@ -87,15 +89,15 @@ class EmptyToken(SCFGToken):
 class RegexToken(NonterminalToken):
     prefix: str
 
-    def render_matching_value(self, value):
+    def render_matching_value(self, value: str) -> str:
         return self.prefix + value
 
     @property
-    def value(self):
+    def value(self) -> str:
         return self.underlying
 
     @property
-    def lark_value(self):
+    def lark_value(self) -> str:
         if (
             self.prefix
         ):  # We need to have this condition because lark gets mad if you give it an empty token.
@@ -104,12 +106,10 @@ class RegexToken(NonterminalToken):
             return self.underlying
 
     @cached_property
-    def compiled(self) -> Pattern:
+    def compiled(self) -> "regex.Pattern[str]":
         assert self.underlying.startswith("/") and self.underlying.endswith("/")
-        return re.compile(self.underlying[1:-1])
+        return regex.compile(self.underlying[1:-1])
 
-
-@dataclass(frozen=True)
-class EntitySchema:
-    name: str
-    prefix: str
+    @cached_property
+    def ascii_chars(self) -> List[str]:
+        return [c for c in ASCII_CHARS if self.compiled.match(c)]

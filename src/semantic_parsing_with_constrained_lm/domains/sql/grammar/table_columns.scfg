@@ -1,0 +1,16 @@
+## these get auto-gen'd per schema
+
+# schema_name -> any_name
+# table_name -> any_name
+# table_alias -> any_name
+# column_name -> any_name
+# schema_table_dot -> schema_dot_ws? table_dot
+# possibly_qualified_column_name -> schema_table_dot? column_name
+
+table_alias -> T "1"
+table_alias -> T "2"
+table_alias -> T "3"
+table_alias -> T "4"
+table_alias -> T "5"
+
+table_name -> table_alias

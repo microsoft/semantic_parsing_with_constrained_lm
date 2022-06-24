@@ -1,0 +1,44 @@
+// Based on scfg_grammar.lark
+%import common.WS
+%import common.ESCAPED_STRING
+%import common._STRING_ESC_INNER
+%import common.INT
+
+%ignore WS
+
+_COMMENT: /#[^\n]*/
+start: (rule | _COMMENT)*
+
+rule: nonterminal_lhs "->" expansion 
+
+expansion: alt ("|" alt)*
+
+?alt: elem0+
+    | empty
+
+?elem0: elem1
+      | elem1 "?"                      -> optional
+      | elem1 "*"                      -> star
+      | elem1 "+"                      -> plus
+      | elem1 "{" count "}"            -> repeat_exact
+      | elem1 "{" count ",}"           -> repeat_min
+      | elem1 "{," count "}"           -> repeat_max
+      | elem1 "{" count "," count "}"  -> repeat_min_max
+
+?elem1: nonterminal_rhs
+      | terminal
+      | "(" expansion ")"                       
+      | "[" /[^\]]+/ "]"                    -> char_class
+      | "[[" /[^\]]+/ "]--[" /[^\]]+/+ "]]" -> char_class_subtract
+
+HYPHEN: "-"
+RIGHT_SQUARE_BRACKET: "]"
+
+ESCAPED_SINGLE_QUOTED_STRING: "'" _STRING_ESC_INNER "'"
+terminal: ESCAPED_STRING | ESCAPED_SINGLE_QUOTED_STRING
+// TODO: #e conflicts with syntax for comments
+empty: "#e"
+nonterminal_lhs: _name
+nonterminal_rhs: _name
+_name: /[_a-zA-Z][_a-zA-Z0-9]*/
+!count: INT

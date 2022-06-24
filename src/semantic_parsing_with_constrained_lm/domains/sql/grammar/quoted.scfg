@@ -1,0 +1,43 @@
+# Single Quotes
+
+single_quoted -> "'" "%"? non_single_quote_star "%"? "'"
+
+# matches zero or more strings that are either not single quotes, or are two single quotes in a row
+non_single_quote_star -> #e
+non_single_quote_star -> /[^']/ non_single_quote_star
+
+# TODO: uncomment?
+# non_single_quote_star -> /[']/ /[']/ non_single_quote_star, /[']/ /[']/ non_single_quote_star
+
+
+# Double Quotes
+
+double_quoted -> "\"" "%"? non_double_quote_star "%"? "\""
+
+# matches zero or more strings that are either not double quotes, or are two double quotes in a row
+non_double_quote_star -> #e
+non_double_quote_star -> /[^"]/ non_double_quote_star
+
+# TODO: uncomment?
+# non_double_quote_star -> /["]/ /["]/ non_double_quote_star, /["]/ /["]/ non_double_quote_star
+
+
+# Back ticks
+
+back_ticked -> "`" non_back_tick_star "`"
+
+# matches zero or more strings that are either not back ticks, or are two back ticks in a row
+non_back_tick_star -> #e
+non_back_tick_star -> /[^`]/ non_back_tick_star
+
+# TODO: uncomment?
+# non_back_tick_star -> /[`]/ /[`]/ non_back_tick_star, /[`]/ /[`]/ non_back_tick_star
+
+
+# Brackets
+
+bracketed -> "[" non_bracket_star "]"
+
+# matches zero or more strings that are not end brackets
+non_bracket_star -> #e
+non_bracket_star -> /[^\]]/ non_bracket_star

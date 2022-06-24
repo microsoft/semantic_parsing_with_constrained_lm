@@ -4,7 +4,7 @@
 # Adapted from https://stackoverflow.com/posts/2912455/revisions,
 # but with type annotations added.
 # pylint: disable=no-member,useless-super-delegation
-from typing import Any, Callable, DefaultDict, TypeVar
+from typing import Any, Callable, DefaultDict, Iterable, Tuple, TypeVar
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -54,3 +54,6 @@ class KeyDefaultDict(DefaultDict[K, V]):
     # To avoid E1136 (unsubscriptable-object) pylint errors at call sites
     def __setitem__(self, key: K, value: V) -> None:
         return super().__setitem__(key, value)
+
+    def items(self) -> Iterable[Tuple[K, V]]:
+        return super().items()

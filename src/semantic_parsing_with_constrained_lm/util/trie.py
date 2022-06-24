@@ -19,7 +19,7 @@ from typing import (
     Union,
 )
 
-from semantic_parsing_with_constrained_lm.util.missing_sentinel import MISSING_SENTINEL, MissingSentinel
+from semantic_parsing_with_constrained_lm.util.unit import UNIT, Unit
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
@@ -38,9 +38,9 @@ class TrieSetNode(Generic[K]):
 class TrieMapNode(Generic[K, V]):
     __slots__ = ("value", "children")
     children: Dict[K, "TrieMapNode[K, V]"]
-    value: Union[MissingSentinel, V]
+    value: Union[Unit, V]
 
-    def find(self, key: Sequence[K]) -> "TrieMapNode[K, V]":
+    def find(self, key: Sequence[K]) -> Optional["TrieMapNode[K, V]"]:
         node = self
         for elem in key:
             child_node = node.children.get(elem)
@@ -55,7 +55,7 @@ class TrieMapNode(Generic[K, V]):
             child_node = node.children.get(elem)
             if child_node is None:
                 child_node = node.children[elem] = TrieMapNode[K, V](
-                    value=MISSING_SENTINEL, children={}
+                    value=UNIT, children={}
                 )
             node = child_node
         return node
@@ -63,8 +63,8 @@ class TrieMapNode(Generic[K, V]):
     @property
     def is_terminal(self) -> bool:
         # Unfortunately, even if you condition on this to access the node's value,
-        # mypy will complain that it could be a MissingSentinel.
-        return not isinstance(self.value, MissingSentinel)
+        # mypy will complain that it could be a Unit.
+        return not isinstance(self.value, Unit)
 
 
 @dataclass
@@ -177,15 +177,15 @@ class Trie(MutableSet[Sequence[K]]):
 class TrieMap(MutableMapping[Sequence[K], V]):
     def __init__(self, iterable: Iterable[Tuple[Sequence[K], V]] = ()):
         # Intended to be a recurisve type, but mypy doesn't support that
-        self.root = TrieMapNode[K, V](value=MISSING_SENTINEL, children={})
+        self.root = TrieMapNode[K, V](value=UNIT, children={})
         for k, v in iterable:
             self[k] = v
 
     def __getitem__(self, key: Sequence[K]) -> V:
         descendant = self.root.find(key)
-        if descendant is None or descendant.value is MISSING_SENTINEL:
+        if descendant is None or descendant.value is UNIT:
             raise KeyError
-        assert not isinstance(descendant.value, MissingSentinel)
+        assert not isinstance(descendant.value, Unit)
         return descendant.value
 
     def __setitem__(self, key: Sequence[K], value: V) -> None:
@@ -215,7 +215,7 @@ class _CompressedNode(Generic[K]):
 class _SearchStateForCompression(Generic[K]):
     __slots__ = ("elem", "is_terminal", "remaining_children", "completed_children")
 
-    elem: Optional[K]
+    elem: Union[K, Unit]
     is_terminal: bool
     remaining_children: Dict[K, "TrieSetNode[K]"]
     completed_children: Dict[Tuple[K, ...], "_CompressedNode[K]"]
@@ -243,8 +243,8 @@ class CompressedTrie(AbstractSet[Sequence[K]]):
 
     def __init__(self, trie: Trie[K]):
         stack = [
-            _SearchStateForCompression(
-                None, trie.root.is_terminal, dict(trie.root.children), {}
+            _SearchStateForCompression[K](
+                UNIT, trie.root.is_terminal, dict(trie.root.children), {}
             )
         ]
         while stack:
@@ -265,6 +265,7 @@ class CompressedTrie(AbstractSet[Sequence[K]]):
                     self.root = _CompressedNode(top.is_terminal, top.completed_children)
                     continue
 
+                assert not isinstance(top.elem, Unit)
                 if not top.is_terminal and len(top.completed_children) == 1:
                     path, only_child = top.completed_children.popitem()
                     key = (top.elem,) + path

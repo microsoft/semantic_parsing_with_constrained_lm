@@ -17,11 +17,11 @@ from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import torch
 from datasets import load_dataset
-from transformers import GPT2Tokenizer
 
 from semantic_parsing_with_constrained_lm.datum import FullDatum
 from semantic_parsing_with_constrained_lm.eval import Metric
 from semantic_parsing_with_constrained_lm.search import PartialParse
+from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ def can_close_paren(s: str) -> bool:
 
 @dataclass
 class BreakCommonTokens:
-    tokenizer: GPT2Tokenizer
+    tokenizer: ClampTokenizer
     open_paren: int
     close_paren: int
     return_: int
@@ -74,17 +74,15 @@ class BreakCommonTokens:
     numbers: List[List[int]]
 
     @classmethod
-    def from_tokenizer(cls, tokenizer: GPT2Tokenizer):
-        [open_paren] = tokenizer.encode(" (", add_special_tokens=False)
-        [close_paren] = tokenizer.encode(" )", add_special_tokens=False)
-        [return_with_space] = tokenizer.encode(" return", add_special_tokens=False)
-        [return_without_space] = tokenizer.encode("return", add_special_tokens=False)
-        [semicolon] = tokenizer.encode(" ;", add_special_tokens=False)
-        [pound_sign] = tokenizer.encode(" #", add_special_tokens=False)
+    def from_tokenizer(cls, tokenizer: ClampTokenizer):
+        [open_paren] = tokenizer.encode(" (")
+        [close_paren] = tokenizer.encode(" )")
+        [return_with_space] = tokenizer.encode(" return")
+        [return_without_space] = tokenizer.encode("return")
+        [semicolon] = tokenizer.encode(" ;")
+        [pound_sign] = tokenizer.encode(" #")
 
-        numbers = [
-            tokenizer.encode(str(i), add_special_tokens=False) for i in range(21)
-        ]
+        numbers = [tokenizer.encode(str(i)) for i in range(21)]
         return BreakCommonTokens(
             tokenizer,
             open_paren,
@@ -117,9 +115,9 @@ class BreakPartialParse(PartialParse):
         allowed_tokens_with_space = set()
         allowed_tokens = set()
 
-        space_char = common_tokens.tokenizer.byte_encoder[ord(" ")]
+        space_char = 32
         for token_id in datum.allowed_tokens:
-            if common_tokens.tokenizer.decoder[token_id][0] == space_char:
+            if common_tokens.tokenizer.id_to_utf8_token_map[token_id][0] == space_char:
                 allowed_tokens_with_space.add(token_id)
             allowed_tokens.add(token_id)
 
@@ -187,9 +185,7 @@ class BreakPartialParse(PartialParse):
         return dataclasses.replace(
             self,
             prefix=self.prefix
-            + self.common_tokens.tokenizer.convert_tokens_to_string(
-                self.common_tokens.tokenizer.decoder[token]
-            ),
+            + self.common_tokens.tokenizer.id_to_utf8_token_map[token].decode("utf-8"),
         )
 
     @property
@@ -284,7 +280,7 @@ class BreakPieces:
 
     @staticmethod
     def build(
-        tokenizer: GPT2Tokenizer,
+        tokenizer: ClampTokenizer,
         data_type: BreakDataType,
         train_sampling_type: BreakSamplingType,
         test_sampling_type: BreakSamplingType,
@@ -352,7 +348,7 @@ class BreakPieces:
     @staticmethod
     def generate_break_data(
         data_type: BreakDataType,
-        tokenizer: GPT2Tokenizer,
+        tokenizer: ClampTokenizer,
         allowed_tokens_dict,
         all_data,
         sampling_type,
@@ -408,10 +404,8 @@ class BreakPieces:
                 copy_tokens = set()
 
                 for s in valid_tokens:
-                    copy_tokens.update(tokenizer.encode(s, add_special_tokens=False))
-                    copy_tokens.update(
-                        tokenizer.encode(" " + s, add_special_tokens=False)
-                    )
+                    copy_tokens.update(tokenizer.encode(s))
+                    copy_tokens.update(tokenizer.encode(" " + s))
 
                 count[group] += 1
                 break_data.append(
@@ -475,6 +469,7 @@ class BreakMetrics(Metric[Sequence[str], BreakDatum]):
         if len(preds) == 0:
             preds = ["return "]
         for i, pred in enumerate(preds):
+            assert target.dialogue_id is not None
             self.rows.append(
                 BreakResponse(
                     target.dialogue_id,

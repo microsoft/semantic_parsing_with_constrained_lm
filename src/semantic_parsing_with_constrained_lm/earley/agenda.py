@@ -3,40 +3,63 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Callable, Dict, Generic, Iterable, List, Set, Tuple, TypeVar
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generic,
+    Iterable,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    TypeVar,
+)
 
-from semantic_parsing_with_constrained_lm.earley.grammar import DottedRule, Nonterm, Symbol, Terminal
+from semantic_parsing_with_constrained_lm.earley.grammar import DottedRule, Nonterm, RuleResult, Terminal
 from semantic_parsing_with_constrained_lm.earley.input import Position
 
 T = TypeVar("T")
 
 
 @dataclass(frozen=True)
-class Item(Generic[Terminal]):
+class Item(Generic[Terminal, RuleResult]):
     """
     An item in the Earley parse table, representing one or more subtrees
     that could yield a particular substring.
     Note that items must be immutable, since they will be hashed for duplicate detection.
     """
 
-    dotted_rule: DottedRule[Terminal]
-    start_col: "Column[Terminal]"
+    dotted_rule: DottedRule[Terminal, RuleResult]
+    start_col: "Column[Terminal, RuleResult]"
 
     # note that we don't need to store the end_col, which is the col that the item is in
 
-    def scan(self, symbol: Symbol[Terminal]) -> Iterable["Item[Terminal]"]:
+    def scan_nonterm(
+        self, nonterm: Nonterm, rule_result: RuleResult
+    ) -> Iterable["Item[Terminal, RuleResult]"]:
         """
         Nondestructively advances the item's dotted rule by this symbol,
         getting 0 or more new items (which preserve the original start column).
         """
-        for new_dotted_rule in self.dotted_rule.scan(symbol):
-            yield Item[Terminal](dotted_rule=new_dotted_rule, start_col=self.start_col)
+        for new_dotted_rule in self.dotted_rule.scan_nonterm(nonterm, rule_result):
+            yield Item(dotted_rule=new_dotted_rule, start_col=self.start_col)
+
+    def scan_terminal(
+        self, terminal: Terminal
+    ) -> Iterable["Item[Terminal, RuleResult]"]:
+        """
+        Nondestructively advances the item's dotted rule by this symbol,
+        getting 0 or more new items (which preserve the original start column).
+        """
+        for new_dotted_rule in self.dotted_rule.scan_terminal(terminal):
+            yield Item(dotted_rule=new_dotted_rule, start_col=self.start_col)
 
     def __repr__(self) -> str:
         return f'Item("{self.start_col.pos}", {self.dotted_rule})'
 
 
-class BP(Generic[Terminal]):
+class Bp(Generic[Terminal]):
     """
     A backpointer.
     Contains enough metadata about how an Item was created to trace
@@ -48,50 +71,51 @@ class BP(Generic[Terminal]):
 
 
 @dataclass(frozen=True)
-class Attach(BP, Generic[Terminal]):
-    server: Item[Terminal]
-    customer: Item[Terminal]
-    col: "Column[Terminal]"
+class Attach(Bp, Generic[Terminal]):
+    server: Item[Terminal, Any]
+    customer: Item[Terminal, Any]
+    col: "Column[Terminal, Any]"
 
     def __len__(self):
         return len(self.server.start_col.pos)
 
 
 @dataclass(frozen=True)
-class Scan(BP, Generic[Terminal]):
-    item: Item[Terminal]
+class Scan(Bp, Generic[Terminal]):
+    item: Item[Terminal, Any]
     terminal: Terminal
-    col: "Column[Terminal]"
+    col: "Column[Terminal, Any]"
 
     def __len__(self):
         return len(self.col.pos)
 
 
 @dataclass(frozen=True)
-class Predict(BP, Generic[Terminal]):
-    new_item: Item[Terminal]
+class Predict(Bp, Generic[Terminal]):
+    new_item: Item[Terminal, Any]
 
     def __len__(self):
         return len(self.new_item.start_col)
 
 
-@dataclass(frozen=True)
-class Meta(Generic[Terminal]):
-    """Zero or more backpointers"""
+# Zero or more backpointers
+Meta = List[Bp[Terminal]]
 
-    bps: List[BP[Terminal]]
+
+class MetaOps(Generic[Terminal]):
+    """Zero or more backpointers"""
 
     @staticmethod
     def zero() -> "Meta[Terminal]":
-        return Meta(bps=[])
+        return []
 
     @staticmethod
     def plus(a: "Meta[Terminal]", b: "Meta[Terminal]") -> "Meta[Terminal]":
-        return Meta(bps=a.bps + b.bps)
+        return a + b
 
     @staticmethod
-    def pure(bp: BP[Terminal]) -> "Meta[Terminal]":
-        return Meta(bps=[bp])
+    def pure(bp: Bp[Terminal]) -> "Meta[Terminal]":
+        return [bp]
 
 
 class Agenda(Generic[T, Terminal]):
@@ -121,7 +145,8 @@ class Agenda(Generic[T, Terminal]):
     # TODO: add a type parameter for Semiring (instead of Weight)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, use_backpointers: bool) -> None:
+        self.use_backpointers: bool = use_backpointers
         # list of all items that were *ever* pushed
         self._items: List[T] = []
         # index of first item that has not yet been popped
@@ -140,7 +165,7 @@ class Agenda(Generic[T, Terminal]):
         Enables `len(my_agenda)`."""
         return len(self._items) - self._next_index
 
-    def push(self, item: T, meta: Meta[Terminal]) -> bool:
+    def push(self, item: T, meta: Optional[Meta[Terminal]]) -> bool:
         """
         Enqueues the item, unless it was previously added.
         Returns whether it was added (or False if it was already enqueued).
@@ -148,11 +173,14 @@ class Agenda(Generic[T, Terminal]):
         i = self.index.get(item)
         if i is None:
             self._items.append(item)
-            self.metas.append(meta)
+            self.metas.append(meta)  # type: ignore
             self.index[item] = len(self._items) - 1
             return True
         else:
-            self.metas[i] = Meta.plus(self.metas[i], meta)  # TODO: r/Weight/semiring/
+            if self.use_backpointers:
+                assert meta is not None
+                # TODO: r/MetaOps/semiring/ ?
+                self.metas[i] = MetaOps.plus(self.metas[i], meta)
             return False
 
     def get_meta(self, item: T) -> Meta[Terminal]:
@@ -189,21 +217,30 @@ class Agenda(Generic[T, Terminal]):
         return f"{self.__class__.__name__}({self.popped}; {self.remaining})"
 
 
-class Column(Agenda[Item[Terminal], Terminal]):
+class Column(Agenda[Item[Terminal, RuleResult], Terminal]):
     """
     A column in Earley's algorithm, storing all partial items that end at a
     particular position (input state).
     """
 
-    def __init__(self, pos: Position[Terminal]):
-        super().__init__()
+    def __init__(self, pos: Position[Terminal], use_backpointers: bool):
+        super().__init__(use_backpointers=use_backpointers)
         self.pos: Position[Terminal] = pos  # a representation of the input state
         # speedup: which nonterminals in this column have we predicted already?
         self.predicted: Set[Nonterm] = set()
-        self.customers: Dict[Nonterm, List[Item[Terminal]]] = defaultdict(list)
+        self.customers: Dict[Nonterm, List[Item[Terminal, RuleResult]]] = defaultdict(
+            list
+        )
         # speedup: who's looking for each nonterminal?
         self.servers: Dict[
-            Nonterm, List[Tuple[Item[Terminal], "Column[Terminal]"]]
+            Nonterm,
+            List[
+                Tuple[
+                    Item[Terminal, RuleResult],
+                    "Column[Terminal, RuleResult]",
+                    RuleResult,
+                ]
+            ],
         ] = defaultdict(list)
         # a corresponding "row" of complete constituents that start at self.pos,
         # to complement the "column" of complete and incomplete constituents
@@ -220,15 +257,17 @@ class Column(Agenda[Item[Terminal], Terminal]):
     def __str__(self) -> str:
         return f"{self.__class__.__name__}({self.pos})"
 
-    def unpop_using_pred(self, pred: Callable[[Item[Terminal]], bool]) -> None:
+    def unpop_using_pred(
+        self, pred: Callable[[Item[Terminal, RuleResult]], bool]
+    ) -> None:
         """Rearrange items in the Column so that it is not popped iff `pred`.
 
         After this function, `pred` entirely determines whether an item is popped or not.
         Whether it was popped before is not taken into account.
         """
-        false_items: List[Item[Terminal]] = []
+        false_items: List[Item[Terminal, RuleResult]] = []
         false_metas: List[Meta[Terminal]] = []
-        true_items: List[Item[Terminal]] = []
+        true_items: List[Item[Terminal, RuleResult]] = []
         true_metas: List[Meta[Terminal]] = []
 
         for item, meta in self.all_items():

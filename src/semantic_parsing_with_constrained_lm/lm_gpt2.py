@@ -4,11 +4,12 @@
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple, cast
+from typing import Any, List, Optional, Sequence, Tuple, cast
 
 import torch
+import torch.nn.functional as F
 from cached_property import cached_property
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from transformers import PreTrainedModel
 
 from semantic_parsing_with_constrained_lm.async_tools.batch_helper import BatchingHelper, BatchMaker
 from semantic_parsing_with_constrained_lm.lm import (
@@ -16,6 +17,7 @@ from semantic_parsing_with_constrained_lm.lm import (
     Seq2SeqHelper,
     Seq2SeqModel,
 )
+from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
 
 @dataclass
@@ -29,13 +31,15 @@ class GPT2State:
         repr=False
     )
 
+    last_logprobs: torch.Tensor = dataclasses.field(repr=False)
+
 
 @dataclass(eq=True, frozen=True)
 class GPT2BatchMaker(BatchMaker):
     hidden_length: int
     extension_length: int
 
-    model: GPT2LMHeadModel = dataclasses.field(compare=False)
+    model: PreTrainedModel = dataclasses.field(compare=False)
 
     @property
     def max_batch_size(self) -> int:
@@ -48,13 +52,13 @@ class GPT2BatchMaker(BatchMaker):
 
     @classmethod
     def from_args(
-        cls, model: GPT2LMHeadModel, args: Tuple[Sequence[int], Optional[GPT2State]],
+        cls, model: PreTrainedModel, args: Tuple[Sequence[int], Optional[GPT2State]]
     ):
         tokens, hidden_state = args
         if hidden_state is None:
-            return cls(0, len(tokens), model=model,)
+            return cls(0, len(tokens), model=model)
         else:
-            return cls(len(hidden_state.prev_tokens), len(tokens), model=model,)
+            return cls(len(hidden_state.prev_tokens), len(tokens), model=model)
 
     async def execute(
         self, args: List[Tuple[Sequence[int], Optional[GPT2State]]]
@@ -67,13 +71,13 @@ class GPT2BatchMaker(BatchMaker):
     async def _execute_without_hidden_state(
         self, args: List[Tuple[Sequence[int], Optional[GPT2State]]]
     ) -> Tuple[torch.Tensor, List[GPT2State]]:
-        tokens, _ = zip(*args)
+        tokens, _ = cast(Tuple[Sequence[Sequence[int]], Any], zip(*args))
         input_ids = torch.tensor(
             list(tokens), dtype=torch.long, device=self.model.device
         )
 
         model_outputs = self.model(input_ids)
-        logprobs = torch.nn.functional.log_softmax(model_outputs["logits"], dim=-1)
+        logprobs = F.log_softmax(model_outputs["logits"], dim=-1)
 
         next_hidden_states = [
             GPT2State(
@@ -88,6 +92,7 @@ class GPT2BatchMaker(BatchMaker):
                     )
                     for past_key_values_for_layer in model_outputs["past_key_values"]
                 ),
+                logprobs[i, -1],
             )
             for i in range(len(args))
         ]
@@ -96,7 +101,12 @@ class GPT2BatchMaker(BatchMaker):
     async def _execute_with_hidden_state(
         self, args: List[Tuple[Sequence[int], Optional[GPT2State]]]
     ):
-        tokens, hidden_states = zip(*args)
+        tokens, hidden_states = cast(
+            Tuple[Sequence[Sequence[int]], Sequence[Optional[GPT2State]]], zip(*args)
+        )
+        assert not any(hs is None for hs in hidden_states)
+        hidden_states = cast(Sequence[GPT2State], hidden_states)
+
         input_ids = torch.tensor(
             list(tokens), dtype=torch.long, device=self.model.device
         )
@@ -113,14 +123,12 @@ class GPT2BatchMaker(BatchMaker):
             for layer_i in range(len(hidden_states[0].past_key_values))
         )
 
-        model_outputs = self.model(
-            input_ids=input_ids, past_key_values=past_key_values,
-        )
-        logprobs = torch.nn.functional.log_softmax(model_outputs["logits"], dim=-1)
+        model_outputs = self.model(input_ids=input_ids, past_key_values=past_key_values)
+        logprobs = F.log_softmax(model_outputs["logits"], dim=-1)
 
         next_hidden_states = [
             GPT2State(
-                past_hidden_state.prev_tokens + tokens,
+                past_hidden_state.prev_tokens + tuple(tokens[i]),
                 tuple(
                     cast(
                         Tuple[torch.Tensor, torch.Tensor],
@@ -131,6 +139,7 @@ class GPT2BatchMaker(BatchMaker):
                     )
                     for past_key_values_for_layer in model_outputs["past_key_values"]
                 ),
+                logprobs[i, -1],
             )
             for i, past_hidden_state in enumerate(hidden_states)
         ]
@@ -140,27 +149,25 @@ class GPT2BatchMaker(BatchMaker):
 @dataclass
 class IncrementalGPT2(IncrementalLanguageModel[GPT2State]):
     pretrained_model_dir: str
-    device: torch.device
+    model: PreTrainedModel
+    clamp_tokenizer: ClampTokenizer
 
     batch_helper: BatchingHelper[
-        Tuple[Sequence[int], Optional[GPT2State]], Tuple[torch.Tensor, List[GPT2State]],
+        Tuple[Sequence[int], Optional[GPT2State]], Tuple[torch.Tensor, List[GPT2State]]
     ] = dataclasses.field(init=False)
-    model: GPT2LMHeadModel = dataclasses.field(init=False)
 
     def __post_init__(self):
-        self.model = GPT2LMHeadModel.from_pretrained(self.pretrained_model_dir)
-        self.model.to(self.device)
         self.batch_helper = BatchingHelper(
             lambda args: GPT2BatchMaker.from_args(self.model, args),
         )
 
     @cached_property
-    def tokenizer(self) -> GPT2Tokenizer:  # pylint: disable=invalid-overridden-method
-        return GPT2Tokenizer.from_pretrained(self.pretrained_model_dir)
+    def vocab_size(self) -> int:  # pylint: disable=invalid-overridden-method
+        return self.clamp_tokenizer.vocab_size
 
     @cached_property
-    def vocab_size(self) -> int:  # pylint: disable=invalid-overridden-method
-        return self.tokenizer.vocab_size
+    def tokenizer(self) -> ClampTokenizer:  # pylint: disable=invalid-overridden-method
+        return self.clamp_tokenizer
 
     async def execute(
         self,
@@ -176,19 +183,26 @@ class IncrementalGPT2(IncrementalLanguageModel[GPT2State]):
             None if drop_next_hidden_state else next_hidden_states[i],
         )
 
+    async def next_logprobs(self, hidden_state: GPT2State) -> torch.Tensor:
+        return hidden_state.last_logprobs
+
 
 @dataclass
 class Seq2SeqGPT2(Seq2SeqModel[GPT2State]):
     """Useful for using GPT-2 as a fine-tuned seq2seq model."""
 
     pretrained_model_dir: str
-    device: torch.device
-
+    model: PreTrainedModel
+    clamp_tokenizer: ClampTokenizer
     incremental_model: IncrementalGPT2 = dataclasses.field(init=False)
     seq2seq_helper: Seq2SeqHelper = dataclasses.field(init=False)
 
     def __post_init__(self):
-        self.incremental_model = IncrementalGPT2(self.pretrained_model_dir, self.device)
+        self.incremental_model = IncrementalGPT2(
+            pretrained_model_dir=self.pretrained_model_dir,
+            model=self.model,
+            clamp_tokenizer=self.clamp_tokenizer,
+        )
         with open(
             os.path.join(self.pretrained_model_dir, "seq2seq_settings.json")
         ) as settings_f:
@@ -201,8 +215,8 @@ class Seq2SeqGPT2(Seq2SeqModel[GPT2State]):
         return self.incremental_model.vocab_size
 
     @cached_property
-    def tokenizer(self) -> GPT2Tokenizer:  # pylint: disable=invalid-overridden-method
-        return self.incremental_model.tokenizer
+    def tokenizer(self) -> ClampTokenizer:  # pylint: disable=invalid-overridden-method
+        return self.clamp_tokenizer
 
     @property
     def decoder_bos_ids(self) -> List[int]:
@@ -239,7 +253,10 @@ class Seq2SeqGPT2(Seq2SeqModel[GPT2State]):
         tokens: Sequence[int],
         hidden_state: GPT2State,
         drop_next_hidden_state: bool = False,
-    ) -> Tuple[torch.Tensor, GPT2State]:
+    ) -> Tuple[torch.Tensor, Optional[GPT2State]]:
         return await self.incremental_model.execute(
             tokens, hidden_state, drop_next_hidden_state
         )
+
+    async def next_logprobs(self, hidden_state: GPT2State) -> torch.Tensor:
+        return hidden_state.last_logprobs

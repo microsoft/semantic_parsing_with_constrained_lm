@@ -1,10 +1,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import csv
 import dataclasses
 from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Dict, Generic, List, Optional, Sequence, TypeVar
+from pathlib import Path
+from typing import Dict, Generic, List, Optional, Sequence, TextIO, TypeVar
 
 from semantic_parsing_with_constrained_lm.datum import FullDatum, FullDatumSub
 from semantic_parsing_with_constrained_lm.model import ModelResult
@@ -15,7 +18,7 @@ Target = TypeVar("Target")
 
 # TODO: Replcae this with a more flexible function suited to each domain
 def exact_match_with_logging(
-    test_datum: FullDatum, kbest: Sequence[ModelResult],
+    test_datum: FullDatum, kbest: Sequence[ModelResult]
 ) -> bool:
     gold = (
         test_datum.canonical.strip(" ")
@@ -104,3 +107,64 @@ class TopKExactMatch(Metric[Sequence[str], FullDatumSub]):
     def reset(self) -> None:
         self.correct = [0] * self.k
         self.total = 0
+
+
+class Logger(Generic[Pred, Target], AbstractContextManager):
+    """Experiment logger interface for capturing model outputs for a
+    given target and logging them in some form. Useful for things like
+    producing error tables.
+
+    The logger implements context manager and must be wrapped in a
+    `with` statement to be used.
+    """
+
+    @abstractmethod
+    def log(self, predictions: Pred, target: Target, metrics: Dict[str, Optional[str]]):
+        pass
+
+
+class ExactMatchErrorLogger(Logger[Sequence[ModelResult], FullDatumSub]):
+    """A logger that logs in 2 files:
+    - base_path / errors.csv - CSV with model error using exact match metric.
+    - base_path / correct.scv - CSV with correct model predictions.
+    """
+
+    def __init__(self, base_path: Path):
+        self._base_path = base_path
+        self._err_file: Optional[TextIO] = None
+        self._err_writer = None
+        self._corr_file: Optional[TextIO] = None
+        self._corr_writer = None
+
+    def __enter__(self):
+        assert not self._err_file and not self._corr_file
+        self._err_file = open(self._base_path / "errors.csv", "w")
+        self._err_writer = csv.writer(
+            self._err_file, delimiter=",", quoting=csv.QUOTE_MINIMAL
+        )
+        self._corr_file = open(self._base_path / "correct.csv", "w")
+        self._corr_writer = csv.writer(
+            self._corr_file, delimiter=",", quoting=csv.QUOTE_MINIMAL
+        )
+
+        self._err_writer.writerow(["Natural", "Gold", "Predicted"])  # type: ignore
+        self._corr_writer.writerow(["Natural", "Gold"])  # type: ignore
+
+    def __exit__(self, *_):
+        assert self._err_file and self._corr_file
+        self._err_file.close()
+        self._corr_file.close()
+
+    def log(
+        self,
+        predictions: Sequence[ModelResult],
+        target: FullDatumSub,
+        metrics: Dict[str, Optional[str]],
+    ):
+        pred = predictions[0].text if len(predictions) else ""
+        if pred != target.canonical:
+            self._err_writer.writerow([target.natural, target.canonical, pred])  # type: ignore
+            self._err_file.flush()  # type: ignore
+        else:
+            self._corr_writer.writerow([target.natural, target.canonical])  # type: ignore
+            self._corr_file.flush()  # type: ignore

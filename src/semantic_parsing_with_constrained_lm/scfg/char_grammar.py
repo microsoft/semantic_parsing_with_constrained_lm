@@ -1,16 +1,31 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+# This file is deprecated.
+# TODO: Replace with Grammar[np.uint8] and UInt8EarleyPartialParse.
+import json
 from dataclasses import dataclass
 from random import shuffle
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from lark import Token, Tree
 from more_itertools import roundrobin
 
-from semantic_parsing_with_constrained_lm.earley.agenda import BP, Attach, Meta, Predict, Scan
+from semantic_parsing_with_constrained_lm.earley.agenda import Attach, Bp, Meta, Predict, Scan
 from semantic_parsing_with_constrained_lm.earley.earley import EarleyLRChart, PackedForest
-from semantic_parsing_with_constrained_lm.earley.grammar import DottedRule, Grammar, Nonterm, Symbol
+from semantic_parsing_with_constrained_lm.earley.grammar import FixedGrammar, LinearDottedRule, Nonterm, Symbol
 from semantic_parsing_with_constrained_lm.earley.input import Position
 from semantic_parsing_with_constrained_lm.util.util import IteratorGenerator
 from semantic_parsing_with_constrained_lm.scfg.parser.token import (
@@ -21,6 +36,7 @@ from semantic_parsing_with_constrained_lm.scfg.parser.token import (
 from semantic_parsing_with_constrained_lm.scfg.parser.types import Alias, Expansion, Nonterminal
 from semantic_parsing_with_constrained_lm.scfg.read_grammar import GrammarRules
 
+T = TypeVar("T")
 # a str of length 1. not enforced statically, but that's what it should be
 Char = str
 # our Terminals are either a char or a regex.
@@ -57,34 +73,123 @@ class CharPosition(Position[CharTerminal]):
         return self.i
 
     def __repr__(self) -> str:
-        return self.string[: self.i] + "^" + self.string[self.i :]
+        return self.prefix + "^" + self.suffix
+
+    @property
+    def prefix(self):
+        return self.string[: self.i]
+
+    @property
+    def suffix(self):
+        return self.string[self.i :]
 
 
 @dataclass(frozen=True)
-class CharGrammar(Grammar[CharTerminal]):
+class NotParsable(Iterator[T]):
+    """
+    The result of parsing a string that is not accepted by the grammar.
+    Also an empty iterator for convenience.
+    """
+
+    # a position corresponding to the longest parsable prefix
+    _last_valid_pos: CharPosition
+    # the terminals that could have appeared directly after `_last_valid_pos`
+    expected_next_terminals: Set[CharTerminal]
+
+    @property
+    def longest_parsable_prefix(self) -> str:
+        """
+        The longest prefix of the string that is a prefix of some string
+        accepted by the grammar.
+        """
+        return self._last_valid_pos.prefix
+
+    @property
+    def actual_next_char(self) -> str:
+        """
+        The offending character after which the prefix became unparsable
+        (or '' if EOS came unexpectedly).
+        """
+        return self._last_valid_pos.suffix[:1]
+
+    def __iter__(self) -> Iterator[T]:
+        """
+        An empty iterator so callers of `parses` can treat all parse results as `Iterator[Tree]`s.
+        """
+        return iter(())
+
+    def __next__(self) -> Tree:
+        raise StopIteration
+
+    def __str__(self):
+        """A helpful error message."""
+        next_char = self.actual_next_char
+        next_char = f"{json.dumps(next_char)}" if next_char else "EOS"
+        expected = [str(t) for t in self.expected_next_terminals]
+        return (
+            f'At """{self.longest_parsable_prefix}^""",\n'
+            + f"expected one of {sorted(expected)},\n"
+            + f"but got {next_char}."
+        )
+
+
+def _find_longest_parsable_prefix(
+    chart: EarleyLRChart[CharTerminal, Any]
+) -> NotParsable:
+    """Constructs a `NotParsable` result from a failed parse chart."""
+    next_by_pos: Dict[CharPosition, Set[CharTerminal]] = {}
+    for col in chart.cols.values():
+        terminals = {
+            s
+            for item, _ in col.all_items()
+            for s in item.dotted_rule.next_symbols()
+            if not isinstance(s, Nonterm)
+        }
+        if terminals:
+            pos = cast(CharPosition, col.pos)
+            next_by_pos[pos] = terminals
+    longest_pos, expected_terminals = max(
+        next_by_pos.items(), key=lambda kv: len(kv[0])
+    )
+    return NotParsable(longest_pos, expected_terminals)
+
+
+@dataclass(frozen=True)
+class CharGrammar(FixedGrammar[CharTerminal, Any]):
     """
     Currently our Earley/GPT integration requires a character-level grammar
     (really a byte-level grammar) to handle the mismatch between grammar
     tokenization and GPT tokenization.
     In the future, we plan on relaxing this requirement by letting
-    `Position`s and `DottedRule`s represent partially consumed grammar
+    `Position`s and `LinearDottedRule`s represent partially consumed grammar
     terminals.
     """
 
     def parse_forest(self, sentence: str) -> PackedForest[CharTerminal]:
         """Parses to a possibly ambiguous PackedForest"""
         start_pos = CharPosition(sentence)
-        chart = EarleyLRChart(self, start_pos)
+        chart = EarleyLRChart(self, start_pos, use_backpointers=True)
         return chart.parse()
 
     def parses(self, sentence: str, max_depth: Optional[int] = None) -> Iterator[Tree]:
         """Parses to an iterator of unambiguous Trees"""
         if max_depth is None:
-            max_depth = len(sentence)
+            # TODO: this could be surprising
+            max_depth = len(sentence) * 10
         start_pos = CharPosition(sentence)
-        chart = EarleyLRChart(self, start_pos)
+        chart = EarleyLRChart(self, start_pos, use_backpointers=True)
         meta = chart.final_meta()
-        return _generate_from_meta(meta=meta, max_depth=max_depth)
+        if meta:
+            return _generate_from_meta(meta=meta, max_depth=max_depth)
+        else:
+            return _find_longest_parsable_prefix(chart)
+
+    def is_grammatical(self, sentence: str) -> bool:
+        start_pos = CharPosition(sentence)
+        chart = EarleyLRChart(self, start_pos, use_backpointers=False)
+        for _ in chart.accepting_positions():
+            return True
+        return False
 
     @staticmethod
     def from_aliased_grammar(
@@ -102,11 +207,16 @@ class CharGrammar(Grammar[CharTerminal]):
                     result.append(Nonterm(token.value))
             return tuple(result)
 
-        rules: Dict[Nonterm, List[DottedRule[CharTerminal]]] = {
-            Nonterm(origin): [
-                DottedRule.from_rule(Nonterm(origin), convert_rhs(rhs), alias=alias)
+        rules: Dict[Nonterm, Set[LinearDottedRule[CharTerminal]]] = {
+            Nonterm(origin): {
+                # Without [CharTerminal],
+                # Pyright incorrectly thinks from_rule returns LinearDottedRule[Symbol[CharTerminal]]
+                # https://github.com/microsoft/pyright/issues/2962
+                LinearDottedRule[CharTerminal].from_rule(
+                    Nonterm(origin), convert_rhs(rhs), alias=alias
+                )
                 for rhs, alias in rhss
-            ]
+            }
             for origin, rhss in sorted(grammar.items())
         }
         return CharGrammar(root=START, expansions=rules)  # type: ignore
@@ -124,18 +234,19 @@ def _generate_from_meta(meta: Meta[CharTerminal], max_depth: int) -> Iterator[Tr
     def go(m: Meta[CharTerminal], d: int) -> Iterator[Tree]:
         if d > 0:
             # TODO: sort by progress, put unaries, and especially self-loops at the end
-            alternatives = list(m.bps)
+            alternatives: List[Bp[CharTerminal]] = list(m)
             # don't infinite loop unless there is no other alternative
             # TODO: is this good?
             shuffle(alternatives)
             yield from roundrobin(*[go_bp(b, d) for b in alternatives])
 
-    def go_bp(bp: BP, d: int) -> Iterator[Tree]:
+    def go_bp(bp: Bp, d: int) -> Iterator[Tree]:
         """Backtrace a single backpointer"""
         last_child_trees: Iterable[Optional[Tree]]
         # Beginning of a rule (includes empty productions)
         if isinstance(bp, Predict):
             alias = bp.new_item.dotted_rule.alias
+            assert alias is not None
             yield Tree(data=alias, children=[])
         # a completed NT
         elif isinstance(bp, Attach):

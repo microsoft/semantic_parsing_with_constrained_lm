@@ -1,0 +1,28 @@
+# This subgrammar matches (non-newline) whitespace sequences on the left side,
+# and returns a single " " on the right side
+# Newlines are turned into "\n"
+
+# 1 or more whitespace chars, returns SPACE
+ws -> ws_char ws_star_empty
+
+# 0 or more whitespace chars, returns SPACE
+ws_star -> #e , SPACE
+ws_star -> ws
+
+# matches any whitespace sequence and returns #e
+ws_star_empty -> ws_char ws_star , #e
+ws_star_empty -> #e
+
+
+SPACE -> " "
+
+# matches any whitespace char and returns SPACE
+ws_char -> SPACE
+ws_char -> "\u000B", SPACE
+ws_char -> TAB , SPACE
+ws_char -> NEWLINE , SPACE
+
+NEWLINE -> "\r" , "\n"
+NEWLINE -> "\n"
+
+TAB -> "\t"

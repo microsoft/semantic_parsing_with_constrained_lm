@@ -11,6 +11,7 @@ from semantic_parsing_with_constrained_lm.domains.qdmr_break import (
     BreakPieces,
     can_close_paren,
 )
+from semantic_parsing_with_constrained_lm.tokenization import GPT2ClampTokenizer
 
 
 def test_nest():
@@ -90,6 +91,7 @@ def test_is_balanced():
 
 
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+tokenizer = GPT2ClampTokenizer(tokenizer)
 common_tokens = BreakCommonTokens.from_tokenizer(tokenizer)
 
 
@@ -115,22 +117,32 @@ def test_can_close_paren():
 
 def test_possible_next_tokens():
     # {next_token_id} is allowed_tokens
-    [next_token_id] = tokenizer.encode("next", add_special_tokens=False)
-    datum = BreakDatum(None, None, None, "", "", {next_token_id}, "", "",)
+    [next_token_id] = tokenizer.encode("next")
+    datum = BreakDatum(
+        None,
+        None,
+        None,
+        natural="",
+        canonical="",
+        allowed_tokens={next_token_id},
+        decomposition="",
+        split="",
+    )
     pp = BreakPartialParse.initial(common_tokens, BreakDataType.nested, datum)
 
     def advance(text: str):
         new_pp = pp
-        for token in tokenizer.encode(text, add_special_tokens=False):
+        for token in tokenizer.encode(text):
             new_pp = new_pp.append(token)
         return new_pp
 
     next_tokens, is_eos = advance(" hello").allowed_next()
-
+    assert next_tokens is not None
     assert set(next_tokens.tolist()) == {next_token_id, common_tokens.open_paren}
     assert is_eos
 
     next_tokens, is_eos = advance(" ( hello").allowed_next()
+    assert next_tokens is not None
     assert set(next_tokens.tolist()) == {
         next_token_id,
         common_tokens.open_paren,
@@ -139,6 +151,6 @@ def test_possible_next_tokens():
     assert not is_eos
 
     next_tokens, is_eos = advance(" ( hello )").allowed_next()
-
+    assert next_tokens is not None
     assert set(next_tokens.tolist()) == {next_token_id}
     assert is_eos
