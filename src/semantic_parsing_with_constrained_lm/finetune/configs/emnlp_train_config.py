@@ -119,6 +119,7 @@ def create_exp(
             do_train=True,
             do_eval=True,
             evaluation_strategy=IntervalStrategy.STEPS,
+            learning_rate=1e-5,
             max_steps=10000,
             save_steps=10000,
             warmup_steps=1000,
