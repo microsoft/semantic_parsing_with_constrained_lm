@@ -73,9 +73,9 @@ An example command below:
    ```
    python -m semantic_parsing_with_constrained_lm.run_exp \
    --config-name semantic_parsing_with_constrained_lm.configs.benchclamp_gpt3_config \
-   --exp-name 'code-davinci-001_calflow_no_context_low_0_2_dev_eval_constrained_bs_5'
+   --exp-name-pattern 'text-davinci-001_calflow_no_context_low_0_2_dev_eval_constrained_bs_5'
    ```
-where `code-davinci-001` refers to the OpenAI model being used, `bs_5` denotes beam size 5,
+where `text-davinci-001` refers to the OpenAI model being used, `bs_5` denotes beam size 5,
 `2` denotes a best last prompt order (`0` for random shuffle and `1` for best first prompt order).
 
 
