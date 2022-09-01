@@ -30,7 +30,7 @@ from semantic_parsing_with_constrained_lm.paths import (
     BENCH_CLAMP_RAW_DATA_DIR,
 )
 from semantic_parsing_with_constrained_lm.tokenization import GPT2ClampTokenizer
-from semantic_parsing_with_constrained_lm.finetune.platypus import calflow_to_datum_format
+from semantic_parsing_with_constrained_lm.finetune.calflow import calflow_to_datum_format
 
 
 def extract_and_write_grammar(
