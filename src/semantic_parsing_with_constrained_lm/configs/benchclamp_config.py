@@ -58,12 +58,15 @@ from semantic_parsing_with_constrained_lm.finetune.lm_finetune import TrainExper
 HUGGINGFACE_MODEL_DIR = (
     Path("/mnt/my_input/huggingface_models/")
     if RUN_ON_AML
-    else Path("huggingface_models/")
+    else Path("/brtx/601-nvme1/estengel/.cache")
+    # else Path("huggingface_models/")
 )
 TRAINED_MODEL_DIR = (
-    Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("trained_models/")
+    # Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("trained_models/")
+    Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("/brtx/604-nvme1/estengel/logit_pr/")
 )
-LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("logs/")
+# LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("logs/")
+LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("/brtx/604-nvme1/estengel/logit_pr/logs/")
 VERSION = "1.0"
 
 LRS: List[float] = [1e-4, 1e-5]
