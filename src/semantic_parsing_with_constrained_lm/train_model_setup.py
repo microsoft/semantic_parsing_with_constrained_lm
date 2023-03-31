@@ -41,27 +41,21 @@ class ClampModelConfig(abc.ABC):
         pass
 
     def maybe_parallelize(self, model: PreTrainedModel) -> None:
-        print(f"TORCH IS AVAILABLE: {torch.cuda.is_available()}")
         if torch.cuda.is_available():
             if self.device_map is not None:
-                print(f"PARALLELIZE")
-                print(f"Parallelizing model with {self.device_map}")
                 model.parallelize(self.device_map)
             else:
-                print("TO GPU 0")
-                print("Entire model to GPU 0")
                 model.to(torch.device("cuda:0"))
         else:
-            print("TO CPU")
             model.to(torch.device("cpu"))
 
 
 class BartModelConfig(ClampModelConfig):
     def setup_model(self) -> Tuple[PreTrainedModel, ClampTokenizer, Seq2SeqSettings]:
-        # if not self.model_loc.exists():
-        #     raise TrainedModelNotFoundError(
-        #         f"Model files not found in {self.model_loc}"
-        #     )
+        if not self.model_loc.exists():
+            raise TrainedModelNotFoundError(
+                f"Model files not found in {self.model_loc}"
+            )
         model = BartForConditionalGeneration.from_pretrained(self.model_loc)
         tokenizer = BartClampTokenizer.from_pretrained(str(self.model_loc))
         seq2seq_settings = Seq2SeqSettings(
