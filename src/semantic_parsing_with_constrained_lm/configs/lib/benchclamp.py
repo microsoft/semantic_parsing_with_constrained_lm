@@ -31,13 +31,12 @@ from semantic_parsing_with_constrained_lm.model import PartialParseBuilder
 from semantic_parsing_with_constrained_lm.paths import BENCH_CLAMP_GRAMMAR_DATA_DIR_AZURE, BENCH_CLAMP_GRAMMAR_DATA_DIR
 from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
-TEST_SUITE_PATH = Path("/home/estengel/semantic_parsing_with_constrained_lm/third_party/test-suite-sql-eval") 
-TEST_SUITE_DATABASE_PATH = Path("/brtx/601-nvme1/estengel/resources/data/benchclamp/raw/test_sql/database/")
-SPIDER_DATABASE_PATH = Path("/brtx/601-nvme1/estengel/resources/data/benchclamp/raw/Spider//database/")
-SPIDER_TABLES_FILE = Path("/brtx/601-nvme1/estengel/resources/data/benchclamp/raw/Spider/tables.json")
-COSQL_DATABASE_PATH = Path("/brtx/601-nvme1/estengel/resources/data/benchclamp/raw/CoSQL/database/")
-COSQL_TABLES_FILE = Path("/brtx/601-nvme1/estengel/resources/data/benchclamp/raw/CoSQL/tables.json")
-
+TEST_SUITE_PATH = Path("/mnt/my_input/test-suite-sql-eval")
+TEST_SUITE_DATABASE_PATH = Path("/mnt/my_input/test-suite-sql-eval/database/")
+SPIDER_DATABASE_PATH = Path("/mnt/my_input/Spider/database/")
+SPIDER_TABLES_FILE = Path("/mnt/my_input/Spider/tables.json")
+COSQL_DATABASE_PATH = Path("/mnt/my_input/CoSQL/database/")
+COSQL_TABLES_FILE = Path("/mnt/my_input/CoSQL/tables.json")
 
 def create_partial_parse_builder(
     constrained: bool, data_config: BenchClampDatasetConfig, tokenizer: ClampTokenizer
