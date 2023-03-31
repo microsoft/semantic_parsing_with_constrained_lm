@@ -184,6 +184,7 @@ def train_set():
     )
 
 
+
 def main(dev_all: bool = typer.Option(True)):
     write_grammar(
         GRAMMAR_DIR,
@@ -196,10 +197,14 @@ def main(dev_all: bool = typer.Option(True)):
     scfg = SCFG.from_folder(str(GRAMMAR_DIR))
 
     dataset_specs = [
-        ("dev_100_uniform", "ids_dev_100_uniform.txt", validation_set),
-        ("test_200_uniform", "ids_dev_200_uniform.txt", validation_set),
-        ("train_300_stratified", "ids_train_300_stratified.txt", train_set),
-        ("train_1000_stratified", "ids_train_1000_stratified.txt", train_set),
+        # ("dev_100_uniform", "ids_dev_100_uniform.txt", validation_set),
+        # ("test_200_uniform", "ids_dev_200_uniform.txt", validation_set),
+        # ("train_300_stratified", "ids_train_300_stratified.txt", train_set),
+        # ("train_1000_stratified", "ids_train_1000_stratified.txt", train_set),
+        # ("train_full", None, "/brtx/601-nvme1/estengel/resources/data/benchclamp/processed/CalFlowV2/train_all.jsonl"),
+        # ("dev_full", None, "/brtx/601-nvme1/estengel/resources/data/benchclamp/processed/CalFlowV2/dev_all.jsonl")
+        ("train_full", "ids_train_full.txt", train_set),
+        ("dev_full", "ids_dev_valid_full.txt", validation_set)
     ]
     if dev_all:
         dataset_specs += [("dev_all", None, validation_set)]
