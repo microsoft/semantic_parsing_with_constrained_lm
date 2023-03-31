@@ -1,6 +1,5 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-
 import asyncio
 import bdb
 import datetime
@@ -232,6 +231,8 @@ async def run(
                     wrap_exception=not debug,
                 ):
                     beam_search_text = [beam.text for beam in kbest]
+                    logprobs = [beam.logprobs for beam in kbest]
+                    tokens = [beam.tokens for beam in kbest]
 
                     all_metric_results_for_datum: Dict[str, Optional[str]] = {}
                     for metric_name, metric in exp.metrics.items():
@@ -252,6 +253,8 @@ async def run(
                         test_datum.turn_part_index,
                         test_datum.agent_context,
                         test_datum.canonical,
+                        token_logprobs=logprobs,
+                        token_sequence=tokens
                     )
                     model_outputs_f.write(jsons.dumps(results) + "\n")
                     model_outputs_f.flush()
@@ -349,6 +352,7 @@ def main(
         # TODO: Change log_dir argument into exp_log_dir
         exps = config_mod.build_config(log_dir, **kwargs)
         filtered_exp_dict = filter_exp_dict(exps, exp_names, exp_name_pattern)
+
         for exp_name in filtered_exp_dict:
             try:
                 exp = filtered_exp_dict[exp_name]()
