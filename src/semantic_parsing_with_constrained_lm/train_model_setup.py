@@ -11,6 +11,7 @@ import torch
 from transformers import (
     BartForConditionalGeneration,
     GPT2LMHeadModel,
+    CodeGenForCausalLM,
     PreTrainedModel,
     T5ForConditionalGeneration,
 )
@@ -19,9 +20,11 @@ from semantic_parsing_with_constrained_lm.lm import Seq2SeqSettings, Surround
 from semantic_parsing_with_constrained_lm.tokenization import (
     ClampTokenizer,
     GPT2ClampTokenizer,
+    BartClampTokenizer,
     T5ClampTokenizer,
 )
 
+from semantic_parsing_with_constrained_lm.modeling_codegen import MyCodeGenForCausalLM
 
 class TrainedModelNotFoundError(FileNotFoundError):
     pass
@@ -38,25 +41,29 @@ class ClampModelConfig(abc.ABC):
         pass
 
     def maybe_parallelize(self, model: PreTrainedModel) -> None:
+        print(f"TORCH IS AVAILABLE: {torch.cuda.is_available()}")
         if torch.cuda.is_available():
             if self.device_map is not None:
+                print(f"PARALLELIZE")
                 print(f"Parallelizing model with {self.device_map}")
                 model.parallelize(self.device_map)
             else:
+                print("TO GPU 0")
                 print("Entire model to GPU 0")
                 model.to(torch.device("cuda:0"))
         else:
+            print("TO CPU")
             model.to(torch.device("cpu"))
 
 
 class BartModelConfig(ClampModelConfig):
     def setup_model(self) -> Tuple[PreTrainedModel, ClampTokenizer, Seq2SeqSettings]:
-        if not self.model_loc.exists():
-            raise TrainedModelNotFoundError(
-                f"Model files not found in {self.model_loc}"
-            )
+        # if not self.model_loc.exists():
+        #     raise TrainedModelNotFoundError(
+        #         f"Model files not found in {self.model_loc}"
+        #     )
         model = BartForConditionalGeneration.from_pretrained(self.model_loc)
-        tokenizer = GPT2ClampTokenizer.from_pretrained(str(self.model_loc))
+        tokenizer = BartClampTokenizer.from_pretrained(str(self.model_loc))
         seq2seq_settings = Seq2SeqSettings(
             input_surround=Surround(bos=[0], eos=[2], starts_with_space=True),
             output_surround=Surround(bos=[0], eos=[2], starts_with_space=True),
@@ -112,6 +119,31 @@ class GPT2ModelConfig(ClampModelConfig):
                 f"Model files not found in {self.model_loc}"
             )
         model = GPT2LMHeadModel.from_pretrained(self.model_loc)
+        tokenizer = GPT2ClampTokenizer.from_pretrained(str(self.model_loc))
+        seq2seq_settings = Seq2SeqSettings(
+            input_surround=Surround(
+                bos=[20490, 25], eos=[198], starts_with_space=True
+            ),  # bos: "Human:", eos: "\n"
+            output_surround=Surround(
+                bos=[34556, 25], eos=[198], starts_with_space=True
+            ),  # bos: "Computer:", eos: "\n"
+            decoder_start_token_id=None,
+        )
+        self.maybe_parallelize(model)
+        model.eval()
+        return model, tokenizer, seq2seq_settings
+
+class CodeGenModelConfig(ClampModelConfig):
+    def setup_model(self) -> Tuple[PreTrainedModel, ClampTokenizer, Seq2SeqSettings]:
+        if not self.model_loc.exists():
+            raise TrainedModelNotFoundError(
+                f"Model files not found in {self.model_loc}"
+            )
+        model = MyCodeGenForCausalLM.from_pretrained(self.model_loc)
+        # use mixed precision 
+        if self.model_loc in ["codegen-2B", "codegen-6B", "codegen-16B"]:
+            model.half()
+
         tokenizer = GPT2ClampTokenizer.from_pretrained(str(self.model_loc))
         seq2seq_settings = Seq2SeqSettings(
             input_surround=Surround(
