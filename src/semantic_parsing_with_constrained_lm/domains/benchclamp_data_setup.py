@@ -90,16 +90,6 @@ class BenchClampDatasetConfig(ClampDataConfig):
         domain_str = self.domain + "/" if self.domain is not None else ""
         if "low" in self.split_name:
             dev_data_suffix = "low"
-        elif "all" in self.split_name and "converted" not in self.split_name and "lower" not in self.split_name:
-            dev_data_suffix = "all" 
-        elif "all_converted" in self.split_name:
-            dev_data_suffix = "all_converted"
-            self.eval_on_full_test = False
-        elif "all_lower" in self.split_name:
-            dev_data_suffix = "all_lower"
-            self.eval_on_full_test = False
-        elif "tiny" in self.split_name:
-            dev_data_suffix = "tiny" 
         else:
             # dev_data_suffix = "medium"
             dev_data_suffix = self.split_name
@@ -138,7 +128,6 @@ class BenchClampDataset(str, Enum):
     MTOP = "MTOP"
     Spider = "Spider"
     CoSQL = "CoSQL"
-    LAmP = "LAmP"
 
 
 OVERNIGHT_DOMAINS = [
@@ -155,7 +144,7 @@ OVERNIGHT_DOMAINS = [
 MTOP_LANGUAGES = ["de", "en", "es", "fr", "hi", "th"]
 
 BENCHCLAMP_SPLIT_NAMES: List[str] = (
-    [f"low_{i}" for i in range(3)] + [f"medium_{i}" for i in range(1)] + ["all"] + ["tiny"] + ["all_converted", "all_lower"]
+    [f"low_{i}" for i in range(3)] + [f"medium_{i}" for i in range(1)] + ["all"] 
 )
 
 BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
@@ -172,27 +161,9 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
             ("no_context", IdentitySequenceCreator(), BENCHCLAMP_SPLIT_NAMES),
             ("last_agent", LastAgentUtterance(), BENCHCLAMP_SPLIT_NAMES),
             ("last_user", LastUserAgentUtterance(), BENCHCLAMP_SPLIT_NAMES),
-            ("last_user", LastUserAgentUtterance(), ['7794']), # add the special split for calflow to compare to Spider
         ]
         for split_name in split_names
     ]
-    # TODO (elias): exclude LaMP for the SQL experiments
-    # + [
-    #     BenchClampDatasetConfig(
-    #         data_id=f"lamp_{input_sequence_creator_name}_{split_name}",
-    #         split_name=split_name,
-    #         domain=None,
-    #         dataset_name=BenchClampDataset.LAmP.value,
-    #         input_sequence_creator=input_sequence_creator,
-    #         eval_on_full_test=False,
-    #     )
-    #     for input_sequence_creator_name, input_sequence_creator, split_names in [
-    #         ("no_context", IdentitySequenceCreator(), BENCHCLAMP_SPLIT_NAMES),
-    #         ("last_agent", LastAgentUtterance(), BENCHCLAMP_SPLIT_NAMES),
-    #         ("last_user", LastUserAgentUtterance(), BENCHCLAMP_SPLIT_NAMES),
-    #     ]
-    #     for split_name in split_names
-    # ]
     + [
         BenchClampDatasetConfig(
             data_id=f"tree_dst_{input_sequence_creator_name}_{split_name}",
@@ -200,7 +171,6 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
             domain=None,
             dataset_name=BenchClampDataset.TreeDST.value,
             input_sequence_creator=input_sequence_creator,
-            eval_on_full_test=True,
         )
         for input_sequence_creator_name, input_sequence_creator, split_names in [
             ("no_context", IdentitySequenceCreator(), BENCHCLAMP_SPLIT_NAMES),
@@ -215,7 +185,6 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
             split_name=split_name,
             domain=language,
             dataset_name=BenchClampDataset.MTOP.value,
-            eval_on_full_test=True,
         )
         for split_name in BENCHCLAMP_SPLIT_NAMES
         for language in ["en"]
@@ -226,7 +195,6 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
             split_name=split_name,
             domain=domain,
             dataset_name=BenchClampDataset.Overnight.value,
-            eval_on_full_test=True,
         )
         for split_name in BENCHCLAMP_SPLIT_NAMES
         for domain in ["blocks"]
@@ -239,7 +207,6 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
             input_sequence_creator=CoSqlUtterance(
                 use_db_val=True, past_utterances="none"
             ),
-            eval_on_full_test=True,
         )
         for split_name in BENCHCLAMP_SPLIT_NAMES 
     ]
@@ -249,7 +216,6 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
             split_name=split_name,
             dataset_name=BenchClampDataset.CoSQL.value,
             input_sequence_creator=input_sequence_creator,
-            eval_on_full_test=True,
         )
         for input_sequence_creator_name, input_sequence_creator, split_names in [
             (
@@ -260,7 +226,7 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
             (
                 "past_all_db_val",
                 CoSqlUtterance(use_db_val=True, past_utterances="all"),
-                ["medium_0", "all", "tiny"],
+                ["medium_0", "all"],
             ),
         ]
         for split_name in split_names
@@ -274,7 +240,6 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
                 use_db_val=True, past_utterances="none"
             ),
             merge_train_and_dev=True,
-            eval_on_full_test=True,
         ),
         BenchClampDatasetConfig(
             data_id="cosql_past_all_db_val_all_merge_train_dev",
@@ -284,7 +249,6 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
                 use_db_val=True, past_utterances="all"
             ),
             merge_train_and_dev=True,
-            eval_on_full_test=True,
         ),
     ]
 )
