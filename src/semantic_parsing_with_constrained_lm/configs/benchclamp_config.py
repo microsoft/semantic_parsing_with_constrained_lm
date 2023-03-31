@@ -4,6 +4,7 @@
 """
 Config to run training and evaluation experiments with BenchCLAMP with non-GPT-3 language models.
 """
+import pdb 
 import dataclasses
 import functools
 import json
@@ -24,6 +25,7 @@ from semantic_parsing_with_constrained_lm.configs.lib.benchclamp import (
     create_partial_parse_builder,
 )
 from semantic_parsing_with_constrained_lm.configs.lib.common import make_semantic_parser
+from semantic_parsing_with_constrained_lm.model import ProblemFactory, DecodingSetup
 from semantic_parsing_with_constrained_lm.datum import Datum, FullDatum
 from semantic_parsing_with_constrained_lm.decoding.partial_parse import (
     PartialParse,
@@ -57,22 +59,29 @@ from semantic_parsing_with_constrained_lm.train_model_setup import (
 from semantic_parsing_with_constrained_lm.finetune.lm_finetune import TrainExperiment
 
 # /mnt/my_input and /mnt/my_output refers to location names used in azure storage accounts.
-HUGGINGFACE_MODEL_DIR = (
-   Path("/mnt/my_input/huggingface_models/")
-   if RUN_ON_AML
-   else Path("huggingface_models/")
-)
-TRAINED_MODEL_DIR = (
-   Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("trained_models/")
-)
-LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("logs/") 
+#HUGGINGFACE_MODEL_DIR = (
+#    Path("/mnt/my_input/huggingface_models/")
+#    if RUN_ON_AML
+#    else Path("huggingface_models/")
+#)
+HUGGINGFACE_MODEL_DIR = Path(os.environ.get("TRANSFORMERS_CACHE", "huggingface_models/") )
+#TRAINED_MODEL_DIR = (
+#    Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("trained_models/")
+#)
+TRAINED_MODEL_DIR = Path(os.environ.get("CHECKPOINT_DIR", "trained_models") )
+# LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("/brtx/601-nvme1/estengel/calflow_calibration/benchclamp/logs/")
+# TODO(Elias): change back once done debugging
+LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("/brtx/602-nvme1/estengel/calflow_calibration/benchclamp/logs/")
+# LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("/brtx/602-nvme1/estengel/ambiguous_parsing/benchclamp/logs/")
+# LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("/home/estengel/semantic_parsing_with_constrained_lm/src/semantic_parsing_with_constrained_lm/logs")
 VERSION = "1.0"
 
 LRS: List[float] = [1e-4, 1e-5]
 LRS_FOR_T5_XL: List[float] = [1e-4]
 BEAM_SIZE = 5
 
-TRAIN_MAX_STEPS = 10000
+# TRAIN_MAX_STEPS = 10000
+TRAIN_MAX_STEPS = 30000
 STEPS_PER_SAVE = 5000
 SEARCH_MAX_STEPS = 1000
 BATCH_SIZE_PER_DEVICE = 4
@@ -155,7 +164,7 @@ TRAIN_MODEL_CONFIGS: List[ClampModelConfig] = [
 BATCH_SIZE_PER_DEVICE_OVERRIDES: Dict[str, int] = {
     f"{lm}_{dataset}_{inp}_{split_id}_{lr}": batch_size
     for lm in ["t5-xl-lm-adapt", "t5-large-lm-adapt"]
-    for dataset in ["spider", "cosql", "calflow", "tree_dst"]
+    for dataset in ["spider", "cosql", "calflow", "tree_dst", "lamp"]
     for inp, batch_size in [
         ("past_none_db_val", 1),
         ("past_one_db_val", 1),
@@ -445,7 +454,7 @@ def create_exps_dict() -> Tuple[
                 )
 
             dev_results: Dict[Tuple[str, Path], float] = {}
-            dev_complete = True
+            dev_complete = False
             for trained_model_id, trained_model_loc in trained_model_locs:
                 eval_model_config = dataclasses.replace(
                     train_model_config,
@@ -455,13 +464,14 @@ def create_exps_dict() -> Tuple[
                 eval_exp_name = f"{trained_model_id}_dev_eval"
                 # We assume sharding is not necessary for dev set TODO: Relax this assumption
                 results_file_path = LOG_DIR / VERSION / eval_exp_name / "results.json"
+                # pdb.set_trace()
                 if Path.exists(results_file_path):
                     dev_complete = True
                     dev_results[(trained_model_id, trained_model_loc)] = json.load(
                         open(results_file_path)
                     )["exact_match/top1"]
                 else:
-                    dev_complete = False
+                    # dev_complete = False
                     eval_exps_dict[eval_exp_name] = functools.partial(
                         create_eval_exp,
                         eval_exp_name,
@@ -470,6 +480,7 @@ def create_exps_dict() -> Tuple[
                         "unconstrained-greedy",
                         is_dev=True,
                     )
+ 
             if dev_complete and len(dev_results) > 0:
                 print(f"All dev expts complete. Results gathered.\n{dev_results}")
                 best_trained_model_info = max(
@@ -486,6 +497,7 @@ def create_exps_dict() -> Tuple[
                         model_loc=best_model_loc,
                     )
                     for constrained in ["constrained", "unconstrained-beam"]:
+                    # for constrained in ["unconstrained-beam"]:
                         eval_exp_name = (
                             f"{best_model_id}_test_eval_{constrained}_bs_{BEAM_SIZE}"
                         )
@@ -497,6 +509,8 @@ def create_exps_dict() -> Tuple[
                             constrained,  # type: ignore
                             is_dev=False,
                         )
+                        # TODO (elias): May need to delete this if it's causing 
+                        # model to hang up because of missing dev experiments
                         dev_eval_exp_name = (
                             f"{best_model_id}_dev_eval_{constrained}_bs_{BEAM_SIZE}"
                         )
