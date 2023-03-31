@@ -91,8 +91,7 @@ class BenchClampDatasetConfig(ClampDataConfig):
         if "low" in self.split_name:
             dev_data_suffix = "low"
         else:
-            # dev_data_suffix = "medium"
-            dev_data_suffix = self.split_name
+            dev_data_suffix = "medium"
 
         train_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR}/{self.dataset_name}/{domain_str}train_{self.split_name}.jsonl"
         print(train_data_file) 
@@ -155,7 +154,6 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
             domain=None,
             dataset_name=BenchClampDataset.CalFlowV2.value,
             input_sequence_creator=input_sequence_creator,
-            eval_on_full_test=True,
         )
         for input_sequence_creator_name, input_sequence_creator, split_names in [
             ("no_context", IdentitySequenceCreator(), BENCHCLAMP_SPLIT_NAMES),
