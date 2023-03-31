@@ -58,17 +58,17 @@ class IncrementalLMSimilarityFunction:
 class DatumPackedSearchNode(Generic[DatumSub], PackedSearchNode):
     test_datum: DatumSub
 
-    def append(self, token: int, logprob: float) -> "DatumPackedSearchNode":
+    def append(self, token: int) -> "DatumPackedSearchNode":
         return DatumPackedSearchNode(
-            tokens=self.tokens + (token,), logprobs = self.logprobs + (logprob.item(),), test_datum=self.test_datum
+            tokens=self.tokens + (token,), test_datum=self.test_datum
         )
 
-    def extend(self, tokens: Sequence[int], logprobs: Sequence[float]) -> "DatumPackedSearchNode":
+    def extend(self, tokens: Sequence[int]) -> "DatumPackedSearchNode":
         if not tokens:
             return self
 
         return DatumPackedSearchNode(
-            tokens=self.tokens + tuple(tokens), logprobs=self.logprobs + tuple(logprobs), test_datum=self.test_datum
+            tokens=self.tokens + tuple(tokens), test_datum=self.test_datum
         )
 
 
@@ -126,7 +126,7 @@ class ProblemFactory(Generic[DatumSub, HS], ABC):
     decoding_setup: DecodingSetup[DatumSub, HS]
 
     def initial(self, datum: DatumSub) -> DatumPackedSearchNode:
-        return DatumPackedSearchNode(tokens=(), logprobs=(), test_datum=datum)
+        return DatumPackedSearchNode(tokens=(), test_datum=datum)
 
     @property
     @abstractmethod
@@ -272,7 +272,6 @@ class FewShotLMDecodingSetup(
             allowed_tokens, can_end = initial_partial_parse.allowed_next(
                 torch.argsort(logprobs[-1], descending=True)
             )
-            # pdb.set_trace()
             self.tokenizer_quirks.check_initial_allowed_tokens(
                 set(allowed_tokens.tolist()) if allowed_tokens is not None else None,
                 can_end,
@@ -339,9 +338,7 @@ class Seq2SeqDecodingSetup(DecodingSetup[DatumSub, HS]):
 @dataclass
 class ModelResult:
     text: str
-    tokens: List[int]
     cost: float
-    logprobs: List[float]
 
 
 class Model(Generic[DatumSub], ABC):
@@ -375,10 +372,7 @@ class BeamSearchSemanticParser(Model[DatumSub], Generic[DatumSub, FullDatumSub, 
         )
 
         return [
-            # TODO (elias): add token probs to model result 
             ModelResult(self.problem_factory.decoding_setup.finalize(n.tokens), 
-                        n.tokens, 
-                        n.cost, 
-                        n.logprobs)  # type: ignore
+                        n.cost)  # type: ignore
             for n in results
         ]

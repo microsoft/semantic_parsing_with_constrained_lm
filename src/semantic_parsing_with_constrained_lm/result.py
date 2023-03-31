@@ -34,4 +34,3 @@ class DatumResult:
     # Token-level log probabilities for each sequence in the final beam
     # (Not yet implemented)
     token_logprobs: Optional[List[List[Tuple[str, float]]]] = None
-    token_sequence: Optional[List[List[Tuple[int]]]] = None

@@ -2,7 +2,6 @@
 # Licensed under the MIT License.
 
 import asyncio
-import pdb 
 import dataclasses
 import gc
 import heapq
@@ -51,11 +50,9 @@ class PackedSearchNode(ABC):
 
     # Output tokens generated so far.
     tokens: Tuple[int, ...]
-    # The log probability of the tokens so far.
-    logprobs: Tuple[float, ...]
 
     @abstractmethod
-    def append(self: PSNSub, token: int, logprob: float) -> PSNSub:
+    def append(self: PSNSub, token: int) -> PSNSub:
         pass
 
     def extend(self: PSNSub, tokens: Sequence[int]) -> PSNSub:
@@ -81,10 +78,6 @@ class FullSearchNode(Generic[HS]):
     @property
     def tokens(self) -> Tuple[int, ...]:
         return self.packed.tokens
-
-    @property
-    def logprobs(self) -> List[float]:
-        return self.packed.logprobs
 
     # This function duplicates the above but its form is more convenient sometimes.
     def get_tokens(self) -> Tuple[int, ...]:
@@ -151,6 +144,7 @@ class ConstrainedDecodingProblem(Problem[HS, PSNSub]):
                 maybe_packed_node.tokens[-1:],
                 maybe_packed_node.hidden_state,
             )
+            
             next_logprobs = logprobs[0]  # Remove the sequence dimension
             unnormalized_cost = maybe_packed_node.unnormalized_cost
             packed_node = maybe_packed_node.packed
@@ -172,6 +166,7 @@ class ConstrainedDecodingProblem(Problem[HS, PSNSub]):
             new_hidden_state = hidden_state
 
         del maybe_packed_node
+        
         # Remove -inf entries
         mask = next_logprobs != -float("inf")
         ordered_tokens = torch.argsort(next_logprobs, descending=True)
@@ -236,7 +231,7 @@ class ConstrainedDecodingProblem(Problem[HS, PSNSub]):
 
             result.append(
                 FullSearchNode(
-                    packed_node.append(token, logprob),
+                    packed_node.append(token),
                     partial_parse.append(token),
                     new_hidden_state,
                     cost=gnmt_length_normalization(
