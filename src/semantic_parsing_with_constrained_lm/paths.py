@@ -16,17 +16,15 @@ CALFLOW_GRAMMAR_DIR = DOMAINS_DIR / "calflow/grammar"
 # Paths used in data preparation for BenchClamp
 RUN_ON_AML = "AMLT_EXPERIMENT_NAME" in os.environ
 
-CLAMP_PRETRAINED_MODEL_DIR = Path(os.environ.get("TRANSFORMERS_CACHE", "huggingface_models/")) 
-#CLAMP_PRETRAINED_MODEL_DIR = (
-#    Path("/mnt/default/huggingface_models/")
-#    if RUN_ON_AML
-#    else Path("huggingface_models/")
-#)
+CLAMP_PRETRAINED_MODEL_DIR = (
+   Path("/mnt/default/huggingface_models/")
+   if RUN_ON_AML
+   else Path("huggingface_models/")
+)
 
-# CLAMP_DATA_DIR = (
-    # Path("/mnt/default/clamp_data/") if RUN_ON_AML else Path("data")
-# )
-CLAMP_DATA_DIR = Path("/brtx/601-nvme1/estengel/resources/data/")
+CLAMP_DATA_DIR = (
+    Path("/mnt/default/clamp_data/") if RUN_ON_AML else Path("data")
+)
 
 OVERNIGHT_DATA_DIR = CLAMP_DATA_DIR / "overnight"
 
