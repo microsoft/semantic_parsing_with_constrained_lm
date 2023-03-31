@@ -367,19 +367,13 @@ class BeamSearchSemanticParser(Model[DatumSub], Generic[DatumSub, FullDatumSub, 
         """Returns tuple of (hypothesis, whether hypothesis was artificially kept
         alive using force_decokde, k-best list"""
         max_steps = self.max_steps_fn(test_datum) if self.max_steps_fn else None
-        # TODO (elias) add way to get token probs from beam search
-        try:
-            results = await beam_search(
-                self.problem_factory.problem,
-                self.problem_factory.initial(test_datum),
-                self.beam_size,
-                event_listener=LoggingEventListener(self.tokenizer, self.beam_size),
-                max_steps=max_steps,
-            )
-        except RuntimeError:
-        #     # NOTE (elias): adding except to avoid out-of-memory for very long inputs (very rare)
-            print(f"SKIPPING LONG")
-            results = []
+        results = await beam_search(
+            self.problem_factory.problem,
+            self.problem_factory.initial(test_datum),
+            self.beam_size,
+            event_listener=LoggingEventListener(self.tokenizer, self.beam_size),
+            max_steps=max_steps,
+        )
 
         return [
             # TODO (elias): add token probs to model result 
