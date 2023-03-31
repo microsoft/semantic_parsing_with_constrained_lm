@@ -61,12 +61,9 @@ from semantic_parsing_with_constrained_lm.train_model_setup import (
 )
 from semantic_parsing_with_constrained_lm.configs.benchclamp_config import HUGGINGFACE_MODEL_DIR
 
-# LOG_DIR = Path("logs/")
-# VERSION = "1.10"
+LOG_DIR = Path("logs/")
+VERSION = "1.10"
 
-# TODO(Elias): change back once done debugging
-LOG_DIR = Path("/brtx/604-nvme1/estengel/logit_pr/logs/")
-VERSION = "1.0"
 
 BEAM_SIZE = 5
 # SEARCH_MAX_STEPS = 500
