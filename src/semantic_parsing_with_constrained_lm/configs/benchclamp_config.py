@@ -8,7 +8,6 @@ import dataclasses
 import functools
 import json
 import sys
-import os 
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Sequence, Tuple, Union
 
@@ -83,13 +82,6 @@ BATCH_SIZE_PER_DEVICE = 4
 # We currently do not support distributed training / inference, so all GPUs need to reside on the same machine.
 TRAIN_MODEL_CONFIGS: List[ClampModelConfig] = [
     T5ModelConfig(
-        model_id="t5-small-lm-adapt",
-        model_loc=HUGGINGFACE_MODEL_DIR / "t5-small-lm-adapt",
-        device_map={0: list(range(4)), 1: list(range(4, 12))}
-        if torch.cuda.device_count() >= 2
-        else None,
-    ),
-    T5ModelConfig(
         model_id="t5-base-lm-adapt",
         model_loc=HUGGINGFACE_MODEL_DIR / "t5-base-lm-adapt",
         device_map={0: list(range(4)), 1: list(range(4, 12))}
@@ -99,14 +91,7 @@ TRAIN_MODEL_CONFIGS: List[ClampModelConfig] = [
     T5ModelConfig(
         model_id="t5-large-lm-adapt",
         model_loc=HUGGINGFACE_MODEL_DIR / "t5-large-lm-adapt",
-        device_map={
-            0: list(range(3)),
-            1: list(range(3, 10)),
-            2: list(range(10, 17)),
-            3: list(range(17, 24)),
-        }
-        if torch.cuda.device_count() >= 4
-        else {0: list(range(10)), 1: list(range(10, 24))}
+        device_map={0: list(range(10)), 1: list(range(10, 24))}
         if torch.cuda.device_count() >= 2
         else None,
     ),
@@ -133,37 +118,19 @@ TRAIN_MODEL_CONFIGS: List[ClampModelConfig] = [
     ),
     BartModelConfig(
         model_id="bart-large", model_loc=HUGGINGFACE_MODEL_DIR / "bart-large",
-        device_map={
-            0: list(range(3)),
-            1: list(range(3, 10)),
-            2: list(range(10, 17)),
-            3: list(range(17, 24)),
-        }
-        if torch.cuda.device_count() >= 4
-        else {0: list(range(10)), 1: list(range(10, 24))}
-        if torch.cuda.device_count() >= 2
-        else None,
-    ),
-    BartModelConfig(
-        model_id="bart-base", model_loc=HUGGINGFACE_MODEL_DIR / "bart-base",
-        # device_map={0: list(range(4)), 1: list(range(4, 12))}
-        # if torch.cuda.device_count() >= 2
-        # else None,
     ),
 ]
 
 BATCH_SIZE_PER_DEVICE_OVERRIDES: Dict[str, int] = {
     f"{lm}_{dataset}_{inp}_{split_id}_{lr}": batch_size
-    for lm in ["t5-xl-lm-adapt", "t5-large-lm-adapt"]
-    for dataset in ["spider", "cosql", "calflow", "tree_dst"]
+    for lm in ["t5-xl-lm-adapt"]
+    for dataset in ["spider", "cosql"]
     for inp, batch_size in [
         ("past_none_db_val", 1),
         ("past_one_db_val", 1),
         ("past_all_db_val", 1),
-        ("last_agent", 2),
-        ("last_user", 2),
     ]
-    for lr in ["0.0001", "1e-5"]
+    for lr in ["0.0001"]
     for split_id in ["low_0", "low_1", "low_2", "medium_0", "all"]
 }
 
@@ -225,7 +192,7 @@ def create_eval_exp(
     exp_name: str,
     model_config: ClampModelConfig,
     data_config: ClampDataConfig,
-    problem_type: Literal[ "unconstrained-beam", "unconstrained-greedy", "constrained"],
+    problem_type: Literal["constrained", "unconstrained-beam", "unconstrained-greedy"],
     is_dev: bool,
 ) -> Experiment:
     model, tokenizer, _ = model_config.setup_model()
