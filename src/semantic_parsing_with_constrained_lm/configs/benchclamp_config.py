@@ -4,7 +4,6 @@
 """
 Config to run training and evaluation experiments with BenchCLAMP with non-GPT-3 language models.
 """
-import pdb 
 import dataclasses
 import functools
 import json
@@ -25,7 +24,6 @@ from semantic_parsing_with_constrained_lm.configs.lib.benchclamp import (
     create_partial_parse_builder,
 )
 from semantic_parsing_with_constrained_lm.configs.lib.common import make_semantic_parser
-from semantic_parsing_with_constrained_lm.model import ProblemFactory, DecodingSetup
 from semantic_parsing_with_constrained_lm.datum import Datum, FullDatum
 from semantic_parsing_with_constrained_lm.decoding.partial_parse import (
     PartialParse,
@@ -59,29 +57,22 @@ from semantic_parsing_with_constrained_lm.train_model_setup import (
 from semantic_parsing_with_constrained_lm.finetune.lm_finetune import TrainExperiment
 
 # /mnt/my_input and /mnt/my_output refers to location names used in azure storage accounts.
-#HUGGINGFACE_MODEL_DIR = (
-#    Path("/mnt/my_input/huggingface_models/")
-#    if RUN_ON_AML
-#    else Path("huggingface_models/")
-#)
-HUGGINGFACE_MODEL_DIR = Path(os.environ.get("TRANSFORMERS_CACHE", "huggingface_models/") )
-#TRAINED_MODEL_DIR = (
-#    Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("trained_models/")
-#)
-TRAINED_MODEL_DIR = Path(os.environ.get("CHECKPOINT_DIR", "trained_models") )
-# LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("/brtx/601-nvme1/estengel/calflow_calibration/benchclamp/logs/")
-# TODO(Elias): change back once done debugging
-LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("/brtx/602-nvme1/estengel/calflow_calibration/benchclamp/logs/")
-# LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("/brtx/602-nvme1/estengel/ambiguous_parsing/benchclamp/logs/")
-# LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("/home/estengel/semantic_parsing_with_constrained_lm/src/semantic_parsing_with_constrained_lm/logs")
+HUGGINGFACE_MODEL_DIR = (
+   Path("/mnt/my_input/huggingface_models/")
+   if RUN_ON_AML
+   else Path("huggingface_models/")
+)
+TRAINED_MODEL_DIR = (
+   Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("trained_models/")
+)
+LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("logs/") 
 VERSION = "1.0"
 
 LRS: List[float] = [1e-4, 1e-5]
 LRS_FOR_T5_XL: List[float] = [1e-4]
 BEAM_SIZE = 5
 
-# TRAIN_MAX_STEPS = 10000
-TRAIN_MAX_STEPS = 30000
+TRAIN_MAX_STEPS = 10000
 STEPS_PER_SAVE = 5000
 SEARCH_MAX_STEPS = 1000
 BATCH_SIZE_PER_DEVICE = 4
@@ -164,7 +155,7 @@ TRAIN_MODEL_CONFIGS: List[ClampModelConfig] = [
 BATCH_SIZE_PER_DEVICE_OVERRIDES: Dict[str, int] = {
     f"{lm}_{dataset}_{inp}_{split_id}_{lr}": batch_size
     for lm in ["t5-xl-lm-adapt", "t5-large-lm-adapt"]
-    for dataset in ["spider", "cosql", "calflow", "tree_dst", "lamp"]
+    for dataset in ["spider", "cosql", "calflow", "tree_dst"]
     for inp, batch_size in [
         ("past_none_db_val", 1),
         ("past_one_db_val", 1),
@@ -173,36 +164,8 @@ BATCH_SIZE_PER_DEVICE_OVERRIDES: Dict[str, int] = {
         ("last_user", 2),
     ]
     for lr in ["0.0001", "1e-5"]
-    for split_id in ["low_0", "low_1", "low_2", "medium_0", "all", "tiny"]
+    for split_id in ["low_0", "low_1", "low_2", "medium_0", "all"]
 }
-BATCH_SIZE_PER_DEVICE_OVERRIDES.update(
-    {
-        f"{lm}_{dataset}_{inp}_{split_id}_{lr}": batch_size
-        for lm in ["t5-base-lm-adapt", "bart-base"]
-        for dataset in ["spider"]
-        for inp, batch_size in [
-            ("past_none_db_val", 3), 
-            ("past_one_db_val", 3),
-            ("past_all_db_val", 3),
-        ]
-        for lr in ["0.0001", "1e-5"]
-        for split_id in ["low_0", "low_1", "low_2", "medium_0", "all", "tiny"]
-    }
-)
-BATCH_SIZE_PER_DEVICE_OVERRIDES.update(
-    {
-        f"{lm}_{dataset}_{inp}_{split_id}_{lr}": batch_size
-        for lm in ["t5-base-lm-adapt", "bart-base"]
-        for dataset in ["cosql"]
-        for inp, batch_size in [
-            ("past_none_db_val", 3),
-            ("past_one_db_val", 3),
-            ("past_all_db_val", 2),
-        ]
-        for lr in ["0.0001", "1e-5"]
-        for split_id in ["low_0", "low_1", "low_2", "medium_0", "all", "tiny"]
-    }
-)
 
 
 def create_train_exp(
@@ -497,7 +460,6 @@ def create_exps_dict() -> Tuple[
                         model_loc=best_model_loc,
                     )
                     for constrained in ["constrained", "unconstrained-beam"]:
-                    # for constrained in ["unconstrained-beam"]:
                         eval_exp_name = (
                             f"{best_model_id}_test_eval_{constrained}_bs_{BEAM_SIZE}"
                         )
