@@ -200,6 +200,8 @@ def main(dev_all: bool = typer.Option(True)):
         ("test_200_uniform", "ids_dev_200_uniform.txt", validation_set),
         ("train_300_stratified", "ids_train_300_stratified.txt", train_set),
         ("train_1000_stratified", "ids_train_1000_stratified.txt", train_set),
+        ("train_full", "ids_train_full.txt", train_set),
+        ("dev_full", "ids_dev_valid_full.txt", validation_set)
     ]
     if dev_all:
         dataset_specs += [("dev_all", None, validation_set)]

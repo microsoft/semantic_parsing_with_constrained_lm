@@ -370,7 +370,9 @@ class BeamSearchSemanticParser(Model[DatumSub], Generic[DatumSub, FullDatumSub, 
             event_listener=LoggingEventListener(self.tokenizer, self.beam_size),
             max_steps=max_steps,
         )
+
         return [
-            ModelResult(self.problem_factory.decoding_setup.finalize(n.tokens), n.cost)  # type: ignore
+            ModelResult(self.problem_factory.decoding_setup.finalize(n.tokens), 
+                        n.cost)  # type: ignore
             for n in results
         ]

@@ -9,6 +9,8 @@ from transformers import (
     RobertaTokenizer,
     T5ForConditionalGeneration,
     T5Tokenizer,
+    AutoModelForCausalLM,
+    AutoTokenizer,
 )
 
 from semantic_parsing_with_constrained_lm.paths import CLAMP_PRETRAINED_MODEL_DIR
@@ -27,7 +29,7 @@ def main():
         ("t5-base-lm-adapt", "google/t5-base-lm-adapt"),
         ("t5-large-lm-adapt", "google/t5-large-lm-adapt"),
         ("t5-xl-lm-adapt", "google/t5-xl-lm-adapt"),
-        ("t5-xxl-lm-adapt", "google/t5-xxl-lm-adapt"),
+        # ("t5-xxl-lm-adapt", "google/t5-xxl-lm-adapt"),
     ]:
         print(f"Downloading {model_id} ...")
         model = T5ForConditionalGeneration.from_pretrained(huggingface_model_id)
@@ -60,6 +62,19 @@ def main():
             model, tokenizer, CLAMP_PRETRAINED_MODEL_DIR / model_id
         )
 
+    # CodeGen
+    for model_id, huggingface_model_id in [
+        ("codegen-350M", "Salesforce/codegen-350M-mono"),
+         ("codegen-2B", "Salesforce/codegen-2B-mono"),
+        ("codegen-6B", "Salesforce/codegen-6B-mono")
+         ("codegen-16B", "Salesforce/codegen-16B-mono"),
+    ]:
+        print(f"Downloading {model_id} ...")
+        model = AutoModelForCausalLM.from_pretrained(huggingface_model_id)
+        tokenizer = AutoTokenizer.from_pretrained(huggingface_model_id)
+        save_model_and_tokenizer(
+            model, tokenizer, CLAMP_PRETRAINED_MODEL_DIR / model_id
+        )
 
 if __name__ == "__main__":
     main()

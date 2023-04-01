@@ -34,6 +34,7 @@ from semantic_parsing_with_constrained_lm.domains.benchclamp_data_setup import (
     BenchClampDatasetConfig,
     ClampDataConfig,
 )
+
 from semantic_parsing_with_constrained_lm.domains.lispress_v2.lispress_exp import TopKLispressMatch
 from semantic_parsing_with_constrained_lm.domains.overnight import OutputType, OvernightPieces
 from semantic_parsing_with_constrained_lm.domains.sql.sql_metric import SQLTestSuiteMatch
@@ -56,19 +57,20 @@ from semantic_parsing_with_constrained_lm.finetune.lm_finetune import TrainExper
 
 # /mnt/my_input and /mnt/my_output refers to location names used in azure storage accounts.
 HUGGINGFACE_MODEL_DIR = (
-    Path("/mnt/my_input/huggingface_models/")
-    if RUN_ON_AML
-    else Path("huggingface_models/")
+   Path("/mnt/my_input/huggingface_models/")
+   if RUN_ON_AML
+   else Path("huggingface_models/")
 )
 TRAINED_MODEL_DIR = (
-    Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("trained_models/")
+   Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("trained_models/")
 )
-LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("logs/")
+LOG_DIR = Path("/mnt/my_output/logs/") if RUN_ON_AML else Path("logs/") 
 VERSION = "1.0"
 
 LRS: List[float] = [1e-4, 1e-5]
 LRS_FOR_T5_XL: List[float] = [1e-4]
 BEAM_SIZE = 5
+
 TRAIN_MAX_STEPS = 10000
 STEPS_PER_SAVE = 5000
 SEARCH_MAX_STEPS = 1000
@@ -115,7 +117,7 @@ TRAIN_MODEL_CONFIGS: List[ClampModelConfig] = [
         else None,
     ),
     BartModelConfig(
-        model_id="bart-large", model_loc=HUGGINGFACE_MODEL_DIR / "bart-large"
+        model_id="bart-large", model_loc=HUGGINGFACE_MODEL_DIR / "bart-large",
     ),
 ]
 
@@ -299,6 +301,8 @@ def create_eval_exp(
                 ),
                 1000,
             )
+
+
             parser = make_semantic_parser(
                 train_data=train_data,  # type: ignore
                 lm=lm,  # type: ignore
@@ -380,7 +384,7 @@ def create_exps_dict() -> Tuple[
                 )
 
             dev_results: Dict[Tuple[str, Path], float] = {}
-            dev_complete = True
+            dev_complete = False
             for trained_model_id, trained_model_loc in trained_model_locs:
                 eval_model_config = dataclasses.replace(
                     train_model_config,
@@ -390,12 +394,14 @@ def create_exps_dict() -> Tuple[
                 eval_exp_name = f"{trained_model_id}_dev_eval"
                 # We assume sharding is not necessary for dev set TODO: Relax this assumption
                 results_file_path = LOG_DIR / VERSION / eval_exp_name / "results.json"
+                # pdb.set_trace()
                 if Path.exists(results_file_path):
+                    dev_complete = True
                     dev_results[(trained_model_id, trained_model_loc)] = json.load(
                         open(results_file_path)
                     )["exact_match/top1"]
                 else:
-                    dev_complete = False
+                    # dev_complete = False
                     eval_exps_dict[eval_exp_name] = functools.partial(
                         create_eval_exp,
                         eval_exp_name,
@@ -404,7 +410,7 @@ def create_exps_dict() -> Tuple[
                         "unconstrained-greedy",
                         is_dev=True,
                     )
-
+ 
             if dev_complete and len(dev_results) > 0:
                 print(f"All dev expts complete. Results gathered.\n{dev_results}")
                 best_trained_model_info = max(
@@ -432,7 +438,19 @@ def create_exps_dict() -> Tuple[
                             constrained,  # type: ignore
                             is_dev=False,
                         )
-
+                        # TODO (elias): May need to delete this if it's causing 
+                        # model to hang up because of missing dev experiments
+                        dev_eval_exp_name = (
+                            f"{best_model_id}_dev_eval_{constrained}_bs_{BEAM_SIZE}"
+                        )
+                        eval_exps_dict[dev_eval_exp_name] = functools.partial(
+                            create_eval_exp,
+                            dev_eval_exp_name,
+                            eval_model_config,
+                            data_config,
+                            constrained,  # type: ignore
+                            is_dev=True,
+                        )
     return train_exps_dict, eval_exps_dict
 
 

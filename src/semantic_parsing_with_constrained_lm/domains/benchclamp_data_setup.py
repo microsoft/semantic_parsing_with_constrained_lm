@@ -17,7 +17,7 @@ from semantic_parsing_with_constrained_lm.domains.lispress_v2.sequence_creator i
 )
 from semantic_parsing_with_constrained_lm.domains.sql.sequence_creator import CoSqlUtterance
 from semantic_parsing_with_constrained_lm.domains.sql.sql_datum import SqlDatum
-from semantic_parsing_with_constrained_lm.paths import BENCH_CLAMP_PROCESSED_DATA_DIR_AZURE
+from semantic_parsing_with_constrained_lm.paths import BENCH_CLAMP_PROCESSED_DATA_DIR_AZURE, BENCH_CLAMP_PROCESSED_DATA_DIR
 from semantic_parsing_with_constrained_lm.sequence_creator import (
     IdentitySequenceCreator,
     SequenceCreator,
@@ -92,12 +92,16 @@ class BenchClampDatasetConfig(ClampDataConfig):
             dev_data_suffix = "low"
         else:
             dev_data_suffix = "medium"
-        train_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR_AZURE}/{self.dataset_name}/{domain_str}train_{self.split_name}.jsonl"
-        dev_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR_AZURE}/{self.dataset_name}/{domain_str}dev_{dev_data_suffix}.jsonl"
+
+        train_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR}/{self.dataset_name}/{domain_str}train_{self.split_name}.jsonl"
+        print(train_data_file) 
+        dev_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR}/{self.dataset_name}/{domain_str}dev_{dev_data_suffix}.jsonl"
         if self.eval_on_full_test:
-            test_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR_AZURE}/{self.dataset_name}/{domain_str}test_all.jsonl"
+            test_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR}/{self.dataset_name}/{domain_str}test_all.jsonl"
         else:
-            test_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR_AZURE}/{self.dataset_name}/{domain_str}test.jsonl"
+            # test_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR}/{self.dataset_name}/{domain_str}test.jsonl"
+            test_data_file = f"{BENCH_CLAMP_PROCESSED_DATA_DIR}/{self.dataset_name}/{domain_str}test_{dev_data_suffix}.jsonl"
+
         with BlobFile(str(train_data_file)) as bf:
             print(f"Reading {train_data_file}")
             train_data = data_from_textio(bf)
@@ -139,7 +143,7 @@ OVERNIGHT_DOMAINS = [
 MTOP_LANGUAGES = ["de", "en", "es", "fr", "hi", "th"]
 
 BENCHCLAMP_SPLIT_NAMES: List[str] = (
-    [f"low_{i}" for i in range(3)] + [f"medium_{i}" for i in range(1)] + ["all"]
+    [f"low_{i}" for i in range(3)] + [f"medium_{i}" for i in range(1)] + ["all"] 
 )
 
 BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
@@ -202,7 +206,7 @@ BENCHCLAMP_DATA_CONFIGS: List[ClampDataConfig] = (
                 use_db_val=True, past_utterances="none"
             ),
         )
-        for split_name in BENCHCLAMP_SPLIT_NAMES
+        for split_name in BENCHCLAMP_SPLIT_NAMES 
     ]
     + [
         BenchClampDatasetConfig(

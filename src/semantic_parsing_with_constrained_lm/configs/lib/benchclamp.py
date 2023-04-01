@@ -18,6 +18,7 @@ from semantic_parsing_with_constrained_lm.domains.benchclamp_data_setup import (
 from semantic_parsing_with_constrained_lm.domains.lispress_v2.grammar import (
     create_partial_parse_builder as create_partial_parse_builder_lispress_v2,
 )
+
 from semantic_parsing_with_constrained_lm.domains.mtop.grammar import (
     create_partial_parse_builder as create_partial_parse_builder_mtop,
 )
@@ -27,7 +28,7 @@ from semantic_parsing_with_constrained_lm.domains.sql.cosql.grammar import (
 )
 from semantic_parsing_with_constrained_lm.domains.sql.cosql.schema import load_schemas
 from semantic_parsing_with_constrained_lm.model import PartialParseBuilder
-from semantic_parsing_with_constrained_lm.paths import BENCH_CLAMP_GRAMMAR_DATA_DIR_AZURE
+from semantic_parsing_with_constrained_lm.paths import BENCH_CLAMP_GRAMMAR_DATA_DIR_AZURE, BENCH_CLAMP_GRAMMAR_DATA_DIR
 from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer
 
 TEST_SUITE_PATH = Path("/mnt/my_input/test-suite-sql-eval")
@@ -36,7 +37,6 @@ SPIDER_DATABASE_PATH = Path("/mnt/my_input/Spider/database/")
 SPIDER_TABLES_FILE = Path("/mnt/my_input/Spider/tables.json")
 COSQL_DATABASE_PATH = Path("/mnt/my_input/CoSQL/database/")
 COSQL_TABLES_FILE = Path("/mnt/my_input/CoSQL/tables.json")
-
 
 def create_partial_parse_builder(
     constrained: bool, data_config: BenchClampDatasetConfig, tokenizer: ClampTokenizer
@@ -79,7 +79,7 @@ def create_partial_parse_builder(
             partial_parse_builder = create_partial_parse_builder_lispress_v2(
                 load_grammar_from_directory(
                     os.path.join(
-                        BENCH_CLAMP_GRAMMAR_DATA_DIR_AZURE,
+                        BENCH_CLAMP_GRAMMAR_DATA_DIR,
                         data_config.dataset_name,
                         domain_str,
                     )
@@ -90,7 +90,7 @@ def create_partial_parse_builder(
             partial_parse_builder = create_partial_parse_builder_mtop(
                 load_grammar_from_directory(
                     os.path.join(
-                        BENCH_CLAMP_GRAMMAR_DATA_DIR_AZURE,
+                        BENCH_CLAMP_GRAMMAR_DATA_DIR,
                         data_config.dataset_name,
                         domain_str,
                     )

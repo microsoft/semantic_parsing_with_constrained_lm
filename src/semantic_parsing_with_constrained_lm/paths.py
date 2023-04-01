@@ -17,9 +17,9 @@ CALFLOW_GRAMMAR_DIR = DOMAINS_DIR / "calflow/grammar"
 RUN_ON_AML = "AMLT_EXPERIMENT_NAME" in os.environ
 
 CLAMP_PRETRAINED_MODEL_DIR = (
-    Path("/mnt/default/huggingface_models/")
-    if RUN_ON_AML
-    else Path("huggingface_models/")
+   Path("/mnt/default/huggingface_models/")
+   if RUN_ON_AML
+   else Path("huggingface_models/")
 )
 
 CLAMP_DATA_DIR = (
