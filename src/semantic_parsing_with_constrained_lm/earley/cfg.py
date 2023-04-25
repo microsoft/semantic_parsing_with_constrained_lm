@@ -150,6 +150,7 @@ def parse_re_char_set(s: str) -> SpanSet:
 
 def load_grammar_from_directory(path: str, start_nt: str = "start") -> DFAGrammar:
     # TODO: Merge this blobfile.glob snippet with the one in read_grammar.py
+    '''
     paths = set(
         itertools.chain(
             blobfile.glob(os.path.join(path, "**", "*.cfg")),
@@ -158,12 +159,17 @@ def load_grammar_from_directory(path: str, start_nt: str = "start") -> DFAGramma
     )
     if len(paths) == 0:
         raise FileNotFoundError(f"No .cfg files found in {path}")
+    '''
+    paths = set("/home/kevinlin/internship-salience-2022/semantic_parsing_with_constrained_lm/grammar/generated.cfg")
 
     fragments: List[str] = []
+    with open("/home/kevinlin/internship-salience-2022/semantic_parsing_with_constrained_lm/grammar/generated.cfg") as myfile:
+        fragments.append(myfile.read())
+    '''
     for grammar_path in paths:
         with BlobFile(grammar_path, streaming=False) as bf:
             fragments.append(bf.read())
-
+    '''
     return load_grammar_from_fragments(fragments, start_nt)
 
 

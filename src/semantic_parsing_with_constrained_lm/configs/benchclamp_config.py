@@ -8,8 +8,8 @@ import dataclasses
 import functools
 import json
 import sys
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Sequence, Tuple, Union
+from pathlib import Path, PosixPath
+from typing import Any, Callable, Dict, List, Sequence, Tuple, Union, Optional
 
 import torch
 from transformers import IntervalStrategy, TrainingArguments
@@ -60,6 +60,8 @@ HUGGINGFACE_MODEL_DIR = (
     if RUN_ON_AML
     else Path("huggingface_models/")
 )
+
+CHECKPOINTS_MODEL_DIR= Path("/home/kevinlin/internship-salience-2022/semantic_parsing_with_constrained_lm/trained_models/1.0")
 TRAINED_MODEL_DIR = (
     Path("/mnt/my_output/trained_models/") if RUN_ON_AML else Path("trained_models/")
 )
@@ -82,6 +84,13 @@ TRAIN_MODEL_CONFIGS: List[ClampModelConfig] = [
     T5ModelConfig(
         model_id="t5-base-lm-adapt",
         model_loc=HUGGINGFACE_MODEL_DIR / "t5-base-lm-adapt",
+        device_map={0: list(range(4)), 1: list(range(4, 12))}
+        if torch.cuda.device_count() >= 2
+        else None,
+    ),
+    T5ModelConfig(
+        model_id="t5-base-lm-findevent",
+        model_loc=CHECKPOINTS_MODEL_DIR / "t5-base-lm-adapt_calflowfindevent_no_context_low_0_0.0001/checkpoint-10000/", # TODO: make a better way of configuring which checkpoint to initialize from
         device_map={0: list(range(4)), 1: list(range(4, 12))}
         if torch.cuda.device_count() >= 2
         else None,
@@ -341,7 +350,7 @@ def create_eval_exp(
     raise ValueError("Could not create eval experiment with inputs")
 
 
-def create_exps_dict() -> Tuple[
+def create_exps_dict(model_loc: Optional[str] = None) -> Tuple[
     Dict[str, Callable[[], TrainExperiment]], Dict[str, Callable[[], Experiment]]
 ]:
     train_exps_dict: Dict[str, Callable[[], TrainExperiment]] = {}
@@ -382,6 +391,9 @@ def create_exps_dict() -> Tuple[
             dev_results: Dict[Tuple[str, Path], float] = {}
             dev_complete = True
             for trained_model_id, trained_model_loc in trained_model_locs:
+                if model_loc:
+                    trained_model_loc = PosixPath(model_loc)
+
                 eval_model_config = dataclasses.replace(
                     train_model_config,
                     model_id=trained_model_id,
@@ -438,11 +450,12 @@ def create_exps_dict() -> Tuple[
 
 def build_config(
     log_dir,  # pylint: disable=unused-argument
+    model_loc, # pylint: disable=unused-argument
     **kwargs: Any,  # pylint: disable=unused-argument
 ) -> Dict[str, Callable[[], Union[TrainExperiment, Experiment]]]:
     sys.setrecursionlimit(50000)
     expts: Dict[str, Callable[[], Union[TrainExperiment, Experiment]]] = {}
-    train_expts, eval_expts = create_exps_dict()
+    train_expts, eval_expts = create_exps_dict(model_loc)
     expts.update(train_expts)
     expts.update(eval_expts)
     return expts

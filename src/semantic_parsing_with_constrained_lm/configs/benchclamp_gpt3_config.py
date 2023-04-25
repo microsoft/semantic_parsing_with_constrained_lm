@@ -189,7 +189,8 @@ def create_exps_dict() -> Tuple[
         prompt_order,
     ) in itertools.product(
         BENCHCLAMP_DATA_CONFIGS,
-        ("text-davinci-001", "code-davinci-001"),
+        # ("text-davinci-001", "code-davinci-001"),
+        ("text-davinci-003",),
         (True, False),
         ("constrained", "unconstrained-beam", "unconstrained-greedy"),
         PromptOrder,

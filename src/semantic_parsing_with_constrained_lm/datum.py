@@ -41,6 +41,8 @@ class BenchClampDatum:
     last_agent_utterance: Optional[str] = None
     last_user_utterance: Optional[str] = None
     last_plan: Optional[str] = None
+    oracle_rewritten_utterance: Optional[str] = None
+    rewritten_utterance: Optional[str] = None
     schema_name: Optional[str] = None
     db_schema_without_val: Optional[str] = None
     db_schema_with_val: Optional[str] = None

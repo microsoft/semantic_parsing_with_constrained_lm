@@ -66,7 +66,7 @@ def cross_validation_fit(
         # Round down first so that we get an integer size for the test set
         test_start = int(test_start)
         test_end = int(test_end)
-
+        
         train_data = pairs[:test_start] + pairs[test_end:]
         test_data = pairs[test_start:test_end]
 

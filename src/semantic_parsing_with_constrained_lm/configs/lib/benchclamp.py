@@ -74,13 +74,14 @@ def create_partial_parse_builder(
 
         elif data_config.dataset_name in (
             BenchClampDataset.CalFlowV2.value,
+            BenchClampDataset.CalFlowFindEventRevise.value,
             BenchClampDataset.TreeDST.value,
         ):
             partial_parse_builder = create_partial_parse_builder_lispress_v2(
                 load_grammar_from_directory(
                     os.path.join(
                         BENCH_CLAMP_GRAMMAR_DATA_DIR_AZURE,
-                        data_config.dataset_name,
+                        BenchClampDataset.CalFlowV2.value, # data_config.dataset_name,
                         domain_str,
                     )
                 ),

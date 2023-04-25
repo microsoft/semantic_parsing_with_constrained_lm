@@ -42,13 +42,14 @@ from semantic_parsing_with_constrained_lm.tokenization import ClampTokenizer, GP
 
 try:
     from semantic_parsing_with_constrained_lm.internal.cosmos_db_client import make_default_client
-    from semantic_parsing_with_constrained_lm.internal.gpt3 import adjust_tokenizer
 except ImportError:
     make_default_client = lambda: None
-    adjust_tokenizer = lambda _1, _2: None
+    # adjust_tokenizer = lambda _1, _2: None
 
-default_engine = os.environ.get("OPENAI_GPT3_ENGINE", "text-davinci-001")
+from semantic_parsing_with_constrained_lm.internal.gpt3 import adjust_tokenizer
 
+default_engine = os.environ.get("OPENAI_GPT3_ENGINE", "text-davinci-003")
+partition_id = os.environ.get("PARTITION_ID")
 
 @dataclass
 class OpenAIGPT3State:
@@ -75,7 +76,7 @@ class GPT3Client:
     http_client: httpx.AsyncClient = dataclasses.field(init=False)
     request_limiter: limits.AdaptiveLimiter = dataclasses.field(
         default_factory=functools.partial(
-            limits.AdaptiveLimiter, initial_qps=10, max_qps=100
+            limits.AdaptiveLimiter, initial_qps=1, max_qps=10
         )
     )
     completions_rate_limited: Callable[
@@ -105,13 +106,17 @@ class GPT3Client:
         elif self.engine == "text-davinci-003":
             api_key = self._init_api_key("SM_OPENAI_API_KEY")
             self.completions_url = "https://smopenai.openai.azure.com/openai/deployments/text-davinci-003/completions?api-version=2021-11-01-preview"
+            auth_header = {'Content-Type': 'application/json', "api-key": api_key}
+        elif self.engine == "text-davinci-001":
+            api_key = self._init_api_key("SM_OPENAI_API_KEY")
+            self.completions_url = "https://smopenai.openai.azure.com/openai/deployments/text-davinci-001/completions?api-version=2021-11-01-preview"
             auth_header = {"api-key": api_key}
         else:
             api_key = self._init_api_key("OPENAI_API_KEY")
             self.completions_url = (
                 f"https://api.openai.com/v1/engines/{self.engine}/completions"
             )
-            auth_header = {"Authorization": f"Bearer {api_key}"}
+            auth_header = {"Authorization": f"Bearer {api_key}", "partition-id": partition_id}
 
         self.http_client = httpx.AsyncClient(
             headers=auth_header,
@@ -365,9 +370,15 @@ class IncrementalOpenAIGPT3(IncrementalLanguageModel[OpenAIGPT3State]):
         if cached:
             next_logprobs = cached["choices"][0]["logprobs"]["top_logprobs"][0]
         else:
+            detokenized = self.tokenizer.decode(all_tokens)
+            batched_next_logprobs, i = await self.next_logprobs_batch_helper.execute(
+                detokenized 
+            )
+            '''
             batched_next_logprobs, i = await self.next_logprobs_batch_helper.execute(
                 all_tokens
             )
+            '''
             next_logprobs = batched_next_logprobs[i]
             if self.use_cache and self.client.cache_client:
                 assert cache_args is not None

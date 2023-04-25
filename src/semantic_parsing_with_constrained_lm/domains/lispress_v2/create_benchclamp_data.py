@@ -190,6 +190,8 @@ def create_grammar_from_train_split():
 
 
 def main():
+
+    '''
     write_data_and_grammar(
         train_dataflow_dialogues_jsonl=BENCH_CLAMP_RAW_DATA_DIR
         / f"{BenchClampDataset.CalFlowV2}/train.dataflow_dialogues.jsonl",
@@ -201,6 +203,7 @@ def main():
         grammar_output_dir=BENCH_CLAMP_GRAMMAR_DATA_DIR
         / f"{BenchClampDataset.CalFlowV2}/",
     )
+
     write_data_and_grammar(
         train_dataflow_dialogues_jsonl=BENCH_CLAMP_RAW_DATA_DIR
         / f"{BenchClampDataset.TreeDST}/train_dst.dataflow_dialogues.jsonl",
@@ -212,6 +215,26 @@ def main():
         / f"{BenchClampDataset.TreeDST}/",
         grammar_output_dir=BENCH_CLAMP_GRAMMAR_DATA_DIR
         / f"{BenchClampDataset.TreeDST}/",
+    )
+    '''
+    
+    date = '20230213'
+    write_data_and_grammar(train_dataflow_dialogues_jsonl=BENCH_CLAMP_RAW_DATA_DIR / f"{BenchClampDataset.CalFlowFindEventRevise}/{date}-find_event_revise.train.proportional_split.smcalformat.jsonl",
+                         dev_dataflow_dialogues_jsonl=BENCH_CLAMP_RAW_DATA_DIR / f"{BenchClampDataset.CalFlowFindEventRevise}/{date}-find_event_revise.valid.proportional_split.smcalformat.jsonl",
+                         test_dataflow_dialogues_jsonl=BENCH_CLAMP_RAW_DATA_DIR / f"{BenchClampDataset.CalFlowFindEventRevise}/{date}-find_event_revise.valid.proportional_split.smcalformat.jsonl",
+                         datum_output_dir=BENCH_CLAMP_PROCESSED_DATA_DIR
+        / f"{BenchClampDataset.CalFlowFindEventRevise}/",
+                         grammar_output_dir=BENCH_CLAMP_GRAMMAR_DATA_DIR
+        / f"{BenchClampDataset.CalFlowFindEventRevise}/",
+    )
+
+    write_data_and_grammar(train_dataflow_dialogues_jsonl=BENCH_CLAMP_RAW_DATA_DIR / f"{BenchClampDataset.CalFlowFindEventRevise}/{date}-find_event_revise.train.proportional_split.edit_fragment_plan.smcalformat.jsonl",
+                         dev_dataflow_dialogues_jsonl=BENCH_CLAMP_RAW_DATA_DIR / f"{BenchClampDataset.CalFlowFindEventRevise}/{date}-find_event_revise.valid.proportional_split.edit_fragment_plan.smcalformat.jsonl",
+                         test_dataflow_dialogues_jsonl=None,
+                         datum_output_dir=BENCH_CLAMP_PROCESSED_DATA_DIR
+        / f"{BenchClampDataset.CalFlowFindEventRevise}/",
+                         grammar_output_dir=BENCH_CLAMP_GRAMMAR_DATA_DIR
+        / f"{BenchClampDataset.CalFlowFindEventRevise}/",
     )
 
 

@@ -235,7 +235,7 @@ def main(
     batch_size: Optional[int] = typer.Option(None),
 ):
     config_mod = importlib.import_module(config_name)
-    exps = config_mod.build_config(log_dir)  # type: ignore
+    exps = config_mod.build_config(log_dir, model_loc=None)  # type: ignore
     filtered_exp_dict = filter_exp_dict(exps, exp_names, exp_name_pattern)
     for exp_name in filtered_exp_dict:
         now = datetime.now().strftime("%Y%m%dT%H%M%S")

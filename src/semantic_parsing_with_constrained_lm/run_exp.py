@@ -14,7 +14,7 @@ import traceback
 from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PosixPath
 from typing import (
     AsyncContextManager,
     Callable,
@@ -334,6 +334,7 @@ def main(
     world_size: int = typer.Option(1),
     results_dir: str = typer.Option("results"),
     eval_split: EvalSplit = typer.Option(EvalSplit.DevSubset),
+    model_loc: Optional[str] = typer.Option(None),
 ):
     async def inner():
         nonlocal exp_names
@@ -347,13 +348,15 @@ def main(
         }
 
         # TODO: Change log_dir argument into exp_log_dir
-        exps = config_mod.build_config(log_dir, **kwargs)
+        # exps = config_mod.build_config(log_dir, **kwargs)
+        exps = config_mod.build_config(log_dir, model_loc, **kwargs)
         filtered_exp_dict = filter_exp_dict(exps, exp_names, exp_name_pattern)
         for exp_name in filtered_exp_dict:
             try:
                 exp = filtered_exp_dict[exp_name]()
             except TrainedModelNotFoundError:
                 # Trying to load models before training and saving them.
+                import pdb; pdb.set_trace()
                 continue
 
             if isinstance(exp, semantic_parsing_with_constrained_lm.run_exp.Experiment):  # type: ignore
