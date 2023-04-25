@@ -102,6 +102,10 @@ class GPT3Client:
             api_key = self._init_api_key("SM_OPENAI_API_KEY")
             self.completions_url = "https://smopenai.openai.azure.com/openai/deployments/codex-cushman/completions?api-version=2021-11-01-preview"
             auth_header = {"api-key": api_key}
+        elif self.engine == "text-davinci-003":
+            api_key = self._init_api_key("SM_OPENAI_API_KEY")
+            self.completions_url = "https://smopenai.openai.azure.com/openai/deployments/text-davinci-003/completions?api-version=2021-11-01-preview"
+            auth_header = {"api-key": api_key}
         else:
             api_key = self._init_api_key("OPENAI_API_KEY")
             self.completions_url = (
