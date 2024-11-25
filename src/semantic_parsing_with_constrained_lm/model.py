@@ -58,17 +58,17 @@ class IncrementalLMSimilarityFunction:
 class DatumPackedSearchNode(Generic[DatumSub], PackedSearchNode):
     test_datum: DatumSub
 
-    def append(self, token: int) -> "DatumPackedSearchNode":
+    def append(self, token: int, logprob: float) -> "DatumPackedSearchNode":
         return DatumPackedSearchNode(
-            tokens=self.tokens + (token,), test_datum=self.test_datum
+            tokens=self.tokens + (token,), logprobs = self.logprobs + (logprob.item(),), test_datum=self.test_datum
         )
 
-    def extend(self, tokens: Sequence[int]) -> "DatumPackedSearchNode":
+    def extend(self, tokens: Sequence[int], logprobs: Sequence[float]) -> "DatumPackedSearchNode":
         if not tokens:
             return self
 
         return DatumPackedSearchNode(
-            tokens=self.tokens + tuple(tokens), test_datum=self.test_datum
+            tokens=self.tokens + tuple(tokens), logprobs=self.logprobs + tuple(logprobs), test_datum=self.test_datum
         )
 
 
@@ -126,7 +126,7 @@ class ProblemFactory(Generic[DatumSub, HS], ABC):
     decoding_setup: DecodingSetup[DatumSub, HS]
 
     def initial(self, datum: DatumSub) -> DatumPackedSearchNode:
-        return DatumPackedSearchNode(tokens=(), test_datum=datum)
+        return DatumPackedSearchNode(tokens=(), logprobs=(), test_datum=datum)
 
     @property
     @abstractmethod
@@ -272,6 +272,7 @@ class FewShotLMDecodingSetup(
             allowed_tokens, can_end = initial_partial_parse.allowed_next(
                 torch.argsort(logprobs[-1], descending=True)
             )
+            # pdb.set_trace()
             self.tokenizer_quirks.check_initial_allowed_tokens(
                 set(allowed_tokens.tolist()) if allowed_tokens is not None else None,
                 can_end,
@@ -338,7 +339,9 @@ class Seq2SeqDecodingSetup(DecodingSetup[DatumSub, HS]):
 @dataclass
 class ModelResult:
     text: str
+    tokens: List[int]
     cost: float
+    logprobs: List[float]
 
 
 class Model(Generic[DatumSub], ABC):
@@ -363,14 +366,19 @@ class BeamSearchSemanticParser(Model[DatumSub], Generic[DatumSub, FullDatumSub, 
         """Returns tuple of (hypothesis, whether hypothesis was artificially kept
         alive using force_decokde, k-best list"""
         max_steps = self.max_steps_fn(test_datum) if self.max_steps_fn else None
+        # TODO (elias) add way to get token probs from beam search
         results = await beam_search(
             self.problem_factory.problem,
             self.problem_factory.initial(test_datum),
             self.beam_size,
             event_listener=LoggingEventListener(self.tokenizer, self.beam_size),
-            max_steps=max_steps,
         )
+
         return [
-            ModelResult(self.problem_factory.decoding_setup.finalize(n.tokens), n.cost)  # type: ignore
+            # TODO (elias): add token probs to model result 
+            ModelResult(self.problem_factory.decoding_setup.finalize(n.tokens), 
+                        n.tokens, 
+                        n.cost, 
+                        n.logprobs)  # type: ignore
             for n in results
         ]
